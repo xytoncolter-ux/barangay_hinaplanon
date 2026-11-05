@@ -1,0 +1,2 @@
+[tool.vercel]
+entrypoint = "hinaplanon_colab_bridge.ml_api:app"
