@@ -25,7 +25,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\hinaplanon_colab_bridge\st
 ```
 
 The per-process execution-policy option does not change your saved policy.
-API health: http://127.0.0.1:8765/health; interactive API: http://127.0.0.1:8765/docs.
+API health: http://127.0.0.1:8001/health; interactive API: http://127.0.0.1:8001/docs.
 PHP login: http://127.0.0.1:8000/index.php?route=login. Stop each with Ctrl+C.
 Both bind only to loopback. If a port is occupied, stop your own previous server;
 do not terminate unrelated processes. PHP's opt-in flag is scoped to its launcher.
@@ -33,11 +33,12 @@ do not terminate unrelated processes. PHP's opt-in flag is scoped to its launche
 Equivalent manual commands (separate terminals, from project root):
 
 ```powershell
-.\hinaplanon_colab_bridge\.venv\Scripts\python.exe -m uvicorn ml_api:app --app-dir hinaplanon_colab_bridge --host 127.0.0.1 --port 8765
+.\hinaplanon_colab_bridge\.venv\Scripts\python.exe -m uvicorn ml_api:app --app-dir hinaplanon_colab_bridge --host 127.0.0.1 --port 8001
 ```
 
 ```powershell
 $env:HINAPLANON_COLAB_MODEL_ENABLED = '1'
+$env:HINAPLANON_ML_API_BASE_URL = 'http://127.0.0.1:8001'
 php -S 127.0.0.1:8000 -t public
 ```
 
@@ -117,6 +118,13 @@ virtual environment between machines; it contains absolute paths.
 
 ## Deployment limit
 
-Keep port 8765 on localhost; no public authentication/transport security is provided.
+Keep port 8001 on localhost; no public authentication/transport security is provided.
 On shared hosting, `127.0.0.1` means the hosting server, not your laptop. Leave the
 flag disabled there unless a compatible secured inference deployment is arranged.
+
+The PHP client supports server-side `HINAPLANON_ML_API_BASE_URL` and optional
+`HINAPLANON_ML_API_TOKEN` (Bearer header). Remote URLs must use HTTPS. A remote
+deployment must actually enforce token authentication at its API/gateway; configuring
+the PHP header does not secure the current localhost-only Python service by itself.
+The integrated five-tab preview and source-reconciliation limits are documented in
+`../PREPAREDNESS_MANAGEMENT.md`. The preview never saves an allocation or prediction.

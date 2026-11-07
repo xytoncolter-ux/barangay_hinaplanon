@@ -31,6 +31,7 @@ use App\Controllers\DashboardController;
 use App\Controllers\UserController;
 use App\Controllers\InventoryController;
 use App\Controllers\DisasterRequestController;
+use App\Controllers\DisasterResourceController;
 use App\Controllers\RecommendationController;
 use App\Controllers\PreparednessController;
 use App\Controllers\FieldReportController;
@@ -116,6 +117,11 @@ $router->post('disaster-requests-recommend', [DisasterRequestController::class, 
 $router->post('disaster-requests-verify', [DisasterRequestController::class, 'verify']);
 $router->post('disaster-requests-assign', [DisasterRequestController::class, 'assign']);
 $router->post('disaster-requests-status', [DisasterRequestController::class, 'updateStatus']);
+$router->get('disaster-requests-resource-show', [DisasterResourceController::class, 'show']);
+$router->post('disaster-requests-resource-review', [DisasterResourceController::class, 'review']);
+$router->post('disaster-requests-resource-allocate', [DisasterResourceController::class, 'allocate']);
+$router->post('disaster-requests-resource-complete', [DisasterResourceController::class, 'complete']);
+$router->post('disaster-requests-resource-retry', [DisasterResourceController::class, 'retry']);
 
 // Module 4: Machine Learning & Decision Tree Recommendations
 $router->get('recommendations', [RecommendationController::class, 'index']);
@@ -129,6 +135,7 @@ $router->get('recommendations-export-purok', [RecommendationController::class, '
 // Module 5: Preparedness Activity Scheduling
 $router->get('preparedness', [PreparednessController::class, 'index']);
 $router->get('preparedness-calendar', [PreparednessController::class, 'calendar']);
+$router->post('preparedness-predict', [PreparednessController::class, 'predict']);
 $router->get('preparedness-create', [PreparednessController::class, 'create']);
 $router->post('preparedness-create', [PreparednessController::class, 'create']);
 $router->get('preparedness-evaluate', [PreparednessController::class, 'evaluate']);

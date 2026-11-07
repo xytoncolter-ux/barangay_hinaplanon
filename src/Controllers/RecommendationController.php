@@ -32,9 +32,7 @@ class RecommendationController {
         if (!empty($statusFilter)) $purokFilters['status'] = $statusFilter;
 
         $purokAssessments = PurokAssessment::all($purokFilters);
-        if (empty($purokAssessments)) {
-            $purokAssessments = PurokAssessmentEngine::runAssessment();
-        }
+        // A filtered/empty GET must never delete and regenerate reviewed assessments.
 
         $kpiSummary = PurokAssessment::getKpiSummary();
 

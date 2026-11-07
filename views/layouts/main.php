@@ -3,32 +3,38 @@
 $route = $_GET['route'] ?? 'dashboard';
 $overview = ['dashboard', 'fa-gauge-high', 'Dashboard Overview', ['dashboard']];
 $profileLink = ['profile', 'fa-id-card', 'Profile Management', ['profile']];
-$events = ['preparedness-calendar', 'fa-calendar-check', 'Event History', ['preparedness', 'preparedness-calendar', 'preparedness-create', 'preparedness-evaluate']];
+$events = ['preparedness-calendar', 'fa-calendar-check', 'Disaster Preparedness Management', ['preparedness', 'preparedness-calendar', 'preparedness-create', 'preparedness-evaluate', 'preparedness-predict', 'recommendations', 'recommendations-show', 'recommendations-purok-show']];
+$events[2] = match ($currentRole) {
+    'ICDRRMO' => 'Event Logs',
+    'Barangay Head', 'Responder' => 'Event Lists',
+    default => $events[2],
+};
 $allocations = ['recommendations', 'fa-network-wired', 'AI Priority Recommendations', ['recommendations', 'recommendations-show', 'recommendations-purok-show']];
 $resources = ['reports', 'fa-boxes-stacked', 'Resource Management', ['reports', 'inventory', 'inventory-create', 'resource-management']];
 $fieldReports = ['field-reports', 'fa-truck-medical', 'Responder Field Status', ['field-reports', 'field-reports-create', 'field-reports-show']];
 $hazards = ['hazard-map', 'fa-map-location-dot', 'Live Hazard Map', ['hazard-map']];
 $requests = ['disaster-requests-create', 'fa-file-circle-plus', 'Fill Up Disaster Request Form', ['disaster-requests', 'disaster-requests-create', 'disaster-requests-show']];
+$requests[3] = array_merge($requests[3], ['disaster-requests-resource-show','disaster-requests-resource-review','disaster-requests-resource-allocate','disaster-requests-resource-complete','disaster-requests-resource-retry']);
+if ($currentRole==='ICDRRMO') { $requests[0]='disaster-requests'; $requests[2]='Disaster Request Review'; }
 $residents = ['pending-residents', 'fa-users-gear', 'Residents Account Management', ['pending-residents', 'residents-management']];
 $navigation = [];
 if ($currentRole === 'Resident') {
     $navigation = ['Overview' => [$overview], 'My community' => [$events,
         ['notifications', 'fa-hand-holding-heart', 'Relief Goods & Hub (Notifications & Alerts)', ['notifications']]], 'My account' => [$profileLink]];
 } elseif ($currentRole === 'Responder') {
+    $fieldReports[2] = 'Submit Fields';
     $responderAllocations = $allocations;
     $responderAllocations[2] = 'Priority Allocations';
     $navigation = ['Overview' => [$overview], 'Field operations' => [$fieldReports, $events],
-        'Decision support' => [$responderAllocations, $resources], 'My account' => [$profileLink]];
+        'Decision support' => [$resources], 'My account' => [$profileLink]];
 } elseif ($currentRole === 'Barangay Head') {
-    $events[2] = 'Disaster Preparedness Activities Schedules';
     $navigation = ['Overview' => [$overview], 'Community preparedness' => [$hazards, $events],
-        'Operations & resources' => [$requests, $allocations, $resources, $fieldReports],
+        'Operations & resources' => [$requests, $resources, $fieldReports],
         'Administration' => [$residents], 'My account' => [$profileLink]];
 } elseif ($currentRole === 'ICDRRMO') {
-    $events[2] = 'Disaster Preparedness Activities Schedules';
     $residents[2] = 'Resident Approvals';
     $navigation = ['Overview' => [$overview], 'Community preparedness' => [$hazards, $events],
-        'Operations & resources' => [$requests, $allocations, $resources, $fieldReports],
+        'Operations & resources' => [$requests, $resources, $fieldReports],
         'Administration' => [['users', 'fa-user-gear', 'System User Accounts', ['users', 'users-create']], $residents,
             ['relief-claims-oversight', 'fa-hand-holding-heart', 'Relief Claims Oversight', ['relief-claims-oversight']]],
         'My account' => [$profileLink]];
@@ -58,7 +64,6 @@ $assetVersion = '20261105-brand2';
         <nav aria-label="<?= htmlspecialchars($currentRole) ?> pages">
             <ul class="sidebar-nav">
                 <?php foreach ($navigation as $group => $links): ?>
-                    <li class="nav-section-title"><?= htmlspecialchars($group) ?></li>
                     <?php foreach ($links as [$target, $icon, $label, $activeRoutes]): ?>
                         <?php $active = in_array($route, $activeRoutes, true); ?>
                         <li class="<?= $active ? 'active' : '' ?>">

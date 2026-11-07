@@ -2,6 +2,8 @@
 Never load untrusted joblib files. This is a development bridge, not a public endpoint.
 """
 import hashlib
+import json
+import math
 import logging
 import os
 import warnings
@@ -73,6 +75,60 @@ async def lifespan(app):
     model = None
 
 app = FastAPI(title='Hinaplanon ML Local Bridge', lifespan=lifespan)
+
+
+@app.post('/predict-decision-tree')
+def predict_decision_tree(payload: PredictionRequest):
+    """Serve the existing PHP CART JSON artifact without retraining or replacing the RF."""
+    path = Path(os.environ.get('HINAPLANON_DECISION_TREE_PATH', str(BASE.parent / 'ml/data/active_model.json')))
+    if not path.is_file():
+        raise HTTPException(status_code=503, detail='Decision Tree artifact unavailable')
+    values = payload.model_dump()
+    if any(not float(values[k]).is_integer() or values[k] > 100_000_000
+           for k in ['affected_households', 'affected_population']):
+        raise HTTPException(status_code=422, detail='Impact inputs must be whole counts within bounds')
+    try:
+        raw = path.read_bytes()
+        artifact = json.loads(raw)
+        if artifact.get('algorithm') != 'DecisionTreeClassifier (CART/Gini)' or set(artifact['feature_names']) != set(FEATURES):
+            raise ValueError('Incompatible Decision Tree artifact')
+        node = artifact['tree']
+        steps = []
+        for _ in range(100):
+            if node['type'] == 'leaf':
+                break
+            if node['type'] != 'split' or node['feature'] not in FEATURES:
+                raise ValueError('Invalid tree split')
+            feature = node['feature']
+            value = values[feature]
+            if node['is_numeric']:
+                threshold = float(node['threshold'])
+                left = float(value) <= threshold
+                steps.append(f'{feature} {"<=" if left else ">"} {threshold:g}')
+            else:
+                target = str(node['threshold'])
+                left = str(value) == target
+                steps.append(f"{feature} {'==' if left else '!='} '{target}'")
+            node = node['left' if left else 'right']
+        else:
+            raise ValueError('Tree depth limit exceeded')
+        allowed = {'Urgent', 'High', 'Medium', 'Low'}
+        label = node['predicted_class']
+        probabilities = {str(k): float(v) for k, v in node['probabilities'].items()}
+        if label not in allowed or label not in probabilities or not set(probabilities).issubset(allowed):
+            raise ValueError('Invalid class labels')
+        if any(not math.isfinite(p) or p < 0 or p > 1 for p in probabilities.values()) or abs(sum(probabilities.values()) - 1) > .001:
+            raise ValueError('Invalid leaf probabilities')
+        digest = hashlib.sha256(raw).hexdigest()
+        return {'predicted_priority': label, 'confidence': round(probabilities[label] * 100, 2),
+                'probabilities': probabilities, 'decision_path': steps,
+                'algorithm': artifact['algorithm'], 'model_source': 'native_decision_tree_api',
+                'model_version': 'CART-' + digest[:12], 'model_sha256': digest,
+                'artifact_saved_at': artifact.get('saved_at'), 'training_date': None, 'exploratory': True,
+                'feature_warnings': ['Existing artifact training provenance and operational accuracy are not independently validated.']}
+    except (ValueError, KeyError, TypeError, OSError) as exc:
+        logger.warning('Decision Tree artifact unavailable or invalid: %s', type(exc).__name__)
+        raise HTTPException(status_code=503, detail='Decision Tree artifact invalid or unavailable') from exc
 
 @app.get('/health')
 def health():

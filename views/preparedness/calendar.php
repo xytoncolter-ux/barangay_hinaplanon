@@ -1,880 +1,113 @@
-<!-- views/preparedness/calendar.php -->
-<?php 
-use App\Core\View; 
+<?php
 use App\Core\Auth;
-use App\Core\Request;
+use App\Support\ActivityCalendar;
 
-$currentRole = Auth::role();
-$selectedMonthStr = $selectedMonth ?? Request::get('month', date('Y-m'));
-if (!preg_match('/^\d{4}-\d{2}$/', (string)$selectedMonthStr)) {
-    $selectedMonthStr = date('Y-m');
-}
-
-$selectedMonthTimestamp = strtotime($selectedMonthStr . '-01');
-$daysInMonth = (int)date('t', $selectedMonthTimestamp);
-$firstDayOfWeek = (int)date('w', $selectedMonthTimestamp); // 0 (Sun) to 6 (Sat)
-$monthNameYear = date('F Y', $selectedMonthTimestamp);
-$todayDateStr = date('Y-m-d');
-$todayDay = (int)date('j');
-$currentMonthNum = date('Y-m');
-
-$prevMonth = date('Y-m', strtotime('-1 month', $selectedMonthTimestamp));
-$nextMonth = date('Y-m', strtotime('+1 month', $selectedMonthTimestamp));
-
-// Prepare JSON-ready event dataset indexed by date (YYYY-MM-DD)
-$calendarJsonData = [];
-$activitiesByDay = [];
-
-foreach ($activities as $act) {
-    $actDateKey = date('Y-m-d', strtotime($act['schedule_date']));
-    $actMonthKey = date('Y-m', strtotime($act['schedule_date']));
-    $isPast = ($act['status'] === 'Completed' || strtotime($act['schedule_date']) < time());
-
-    if ($actMonthKey === $selectedMonthStr) {
-        $dayNum = (int)date('j', strtotime($act['schedule_date']));
-        $activitiesByDay[$dayNum][] = $act;
-    }
-
-    $calendarJsonData[$actDateKey][] = [
-        'id' => (int)$act['preparedness_activities_id'],
-        'title' => $act['title'],
-        'type' => $act['activity_type'],
-        'description' => $act['description'],
-        'schedule_date' => $act['schedule_date'],
-        'date_formatted' => date('l, F d, Y', strtotime($act['schedule_date'])),
-        'time' => date('h:i A', strtotime($act['schedule_date'])),
-        'location' => $act['location'],
-        'purok_name' => !empty($act['purok_name']) ? $act['purok_name'] : 'All Hinaplanon Puroks',
-        'max_participants' => (int)$act['max_participants'],
-        'assigned_personnel' => !empty($act['assigned_personnel']) ? $act['assigned_personnel'] : 'BDRRMC Officer In-Charge',
-        'volunteer_person' => !empty($act['volunteer_person']) ? $act['volunteer_person'] : 'Purok Disaster Volunteers & Youth Council',
-        'status' => $act['status'],
-        'is_past' => $isPast,
-        'organizer' => trim(($act['organizer_first'] ?? 'BDRRMC') . ' ' . ($act['organizer_last'] ?? 'Admin')),
-        'evaluation' => !empty($act['evaluation_id']) ? [
-            'actual_turnout' => (int)$act['actual_turnout'],
-            'rating' => (int)$act['objectives_met_rating'],
-            'problems' => $act['problems_encountered'] ?? '',
-            'supplies' => $act['supplies_used'] ?? '',
-            'recommendations' => $act['recommendations_for_improvement'] ?? ''
-        ] : null
-    ];
-}
+$calendar = ActivityCalendar::build($activities, $_GET);
+$ce = static fn($v) => htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
+$recorded = static fn($v) => $v === null || trim((string)$v) === '' ? 'Not recorded' : (string)$v;
+$canSchedule = Auth::hasRole(['Barangay Head','ICDRRMO']);
+$canEvaluate = Auth::hasRole(['Barangay Head','ICDRRMO','Responder']);
+$base = ['route'=>'preparedness-calendar','tab'=>'activities','month'=>$calendar['month'],
+    'cal_view'=>$calendar['view'],'cal_status'=>$calendar['status'],'cal_search'=>$calendar['search'],
+    'cal_scope'=>$calendar['scope'],'cal_date'=>$calendar['focus']->format('Y-m-d')];
+$calUrl = static fn($changes=[]) => 'index.php?'.http_build_query(array_replace($base,$changes), '', '&', PHP_QUERY_RFC3986);
+$monthNames = [1=>'January','February','March','April','May','June','July','August','September','October','November','December'];
+$prev = $calendar['view']==='week' ? $calendar['start']->modify('-7 days') : $calendar['first']->modify('-1 month');
+$next = $calendar['view']==='week' ? $calendar['start']->modify('+7 days') : $calendar['first']->modify('+1 month');
+$jsonDays=[];
+foreach ($calendar['days'] as $date=>$day) $jsonDays[$date]=['label'=>$day['date']->format('l, F j, Y'),'ids'=>array_keys($day['events'])];
+// Day details may contain visible events even when the list scope is restricted.
+$detailEvents = $calendar['cards'] + $calendar['visible'];
 ?>
-
-<style>
-/* Interactive Calendar Day Cells */
-.cal-day-cell {
-    min-height: 96px;
-    border-radius: 8px;
-    padding: 7px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    cursor: pointer;
-    position: relative;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    background: #ffffff;
-    border: 1px solid var(--border-light);
-    user-select: none;
-}
-.cal-day-cell:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
-    border-color: #3b82f6 !important;
-    z-index: 2;
-}
-.cal-day-cell.is-today {
-    background: #eff6ff !important;
-    border: 2px solid #2563eb !important;
-}
-.cal-day-cell.has-events {
-    background: #fdfdf9;
-    border-color: #f59e0b;
-}
-.cal-day-cell.cal-day-active {
-    outline: 3px solid #2563eb !important;
-    outline-offset: -1px;
-    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.25) !important;
-    z-index: 3;
-}
-
-/* Day Details Modal */
-.cal-modal-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    background: rgba(15, 23, 42, 0.68);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    z-index: 99999;
-    padding: 16px;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.22s ease-in-out;
-}
-.cal-modal-backdrop.is-open {
-    opacity: 1;
-    pointer-events: auto;
-}
-.cal-modal-dialog {
-    background: #ffffff;
-    border-radius: 12px;
-    width: 100%;
-    max-width: 680px;
-    max-height: 88vh;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-    overflow: hidden;
-    transform: translateY(20px) scale(0.96);
-    transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.cal-modal-backdrop.is-open .cal-modal-dialog {
-    transform: translateY(0) scale(1);
-}
-.cal-modal-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid #e2e8f0;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    background: #f8fafc;
-}
-.cal-modal-close {
-    background: transparent;
-    border: none;
-    font-size: 1.6rem;
-    line-height: 1;
-    color: #64748b;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 6px;
-    transition: all 0.15s ease;
-}
-.cal-modal-close:hover {
-    color: #0f172a;
-    background: #e2e8f0;
-}
-.cal-modal-body {
-    padding: 20px;
-    overflow-y: auto;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-}
-.cal-modal-footer {
-    padding: 12px 20px;
-    border-top: 1px solid #e2e8f0;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #f8fafc;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-</style>
-
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
-    <div>
-        <h2 style="font-size: 1.4rem; font-weight: 800; color: var(--primary-dark); margin: 0;">
-            <?php if ($currentRole === 'ICDRRMO'): ?>
-                ICDRRMO Event Logs & Activity Calendar
-            <?php elseif ($currentRole === 'Barangay Head'): ?>
-                Barangay Hinaplanon Event Lists & Activity Calendar
-            <?php else: ?>
-                Barangay Hinaplanon Preparedness Drills & Activity Calendar
+<link rel="stylesheet" href="assets/css/activity-calendar.css?v=20261106-calendar2">
+<section class="activity-calendar" aria-labelledby="activity-calendar-heading" data-view="<?= $ce($calendar['view']) ?>" data-scope="<?= $ce($calendar['scope']) ?>" data-can-schedule="<?= $canSchedule?'true':'false' ?>">
+    <div class="cal-section-heading">
+        <div><h2 id="activity-calendar-heading">Monthly Highlights &amp; Activity Schedule</h2><p>Barangay Hinaplanon · Asia/Manila</p></div>
+        <div class="page-actions">
+            <?php if ($canSchedule): ?><a class="btn btn-primary" href="index.php?route=preparedness-create"><i class="fa fa-calendar-plus" aria-hidden="true"></i> Schedule New Activity</a><?php endif; ?>
+        </div>
+    </div>
+    <details class="cal-summary"><summary>Schedule summary</summary><div class="grid-cols-4 cal-metrics">
+        <div class="stat-card"><div class="stat-label">Recorded activities</div><div class="stat-value"><?= $calendar['stats']['total'] ?></div><div class="stat-sub">With a valid scheduled date</div></div>
+        <div class="stat-card"><div class="stat-label">Upcoming activities</div><div class="stat-value"><?= $calendar['stats']['upcoming'] ?></div><div class="stat-sub">Future scheduled starts</div></div>
+        <div class="stat-card"><div class="stat-label">Completed activities</div><div class="stat-value"><?= $calendar['stats']['completed'] ?></div><div class="stat-sub">Recorded Completed status only</div></div>
+        <div class="stat-card"><div class="stat-label">Recorded turnout</div><div class="stat-value"><?= number_format($calendar['stats']['turnout']) ?></div><div class="stat-sub">Evaluation attendance, not capacity</div></div>
+    </div></details>
+    <?php if ($calendar['invalid']): ?><div class="alert alert-warning" role="status"><div><?= count($calendar['invalid']) ?> activity record(s) have missing or invalid dates and cannot be placed on a calendar. No date has been invented.<details><summary>Records without a reliable calendar date</summary><ul><?php foreach ($calendar['invalid'] as $id=>$a): ?><li>#<?= (int)$id ?> · <?= $ce($recorded($a['title']??null)) ?> · <?= $ce($recorded($a['status']??null)) ?> · Scheduled date: Not recorded / invalid</li><?php endforeach; ?></ul></details></div></div><?php endif; ?>
+    <div class="card cal-shell">
+        <div class="card-header cal-toolbar">
+            <div class="page-actions cal-period-navigation">
+                <a class="btn btn-outline btn-sm" href="<?= $ce($calUrl(['month'=>$calendar['now']->format('Y-m'),'cal_date'=>$calendar['today']])) ?>">Today</a>
+                <?php if ((int)$prev->format('Y')>=1): ?><a class="btn btn-outline btn-sm" rel="prev" href="<?= $ce($calUrl(['month'=>$prev->format('Y-m'),'cal_date'=>$prev->format('Y-m-d')])) ?>" aria-label="Previous <?= $calendar['view']==='week'?'week':'month' ?>">‹ Prev</a><?php endif; ?>
+                <?php if ((int)$next->format('Y')<=9999): ?><a class="btn btn-outline btn-sm" rel="next" href="<?= $ce($calUrl(['month'=>$next->format('Y-m'),'cal_date'=>$next->format('Y-m-d')])) ?>" aria-label="Next <?= $calendar['view']==='week'?'week':'month' ?>">Next ›</a><?php endif; ?>
+                <details class="cal-picker" id="cal-picker" data-year="<?= (int)$calendar['first']->format('Y') ?>" data-month="<?= (int)$calendar['first']->format('n') ?>">
+                    <summary id="cal-period-title" aria-label="Choose month and year"><?= $ce($calendar['first']->format('F Y')) ?> <span aria-hidden="true">⌄</span></summary>
+                    <div class="cal-picker-panel" aria-label="Month and year picker">
+                        <div class="cal-picker-header"><button type="button" class="cal-picker-arrow" data-picker-prev aria-label="Previous year" hidden>‹</button><button type="button" class="cal-picker-year" data-picker-year hidden><?= $calendar['first']->format('Y') ?></button><button type="button" class="cal-picker-arrow" data-picker-next aria-label="Next year" hidden>›</button></div>
+                        <div class="cal-picker-grid" data-month-grid aria-label="Months"><?php foreach ($monthNames as $number=>$name): ?><a href="<?= $ce($calUrl(['month'=>sprintf('%04d-%02d',(int)$calendar['first']->format('Y'),$number),'cal_date'=>sprintf('%04d-%02d-01',(int)$calendar['first']->format('Y'),$number)])) ?>" data-picker-month="<?= $number ?>" <?= (int)$calendar['first']->format('n')===$number?'aria-current="date"':'' ?>><?= substr($name,0,3) ?></a><?php endforeach; ?></div>
+                        <div class="cal-picker-grid" data-year-grid aria-label="Years" hidden></div>
+                        <button class="cal-picker-back" data-picker-back type="button" hidden>Back to months</button>
+                        <form class="cal-picker-fallback" method="get"><?php foreach ($base as $key=>$v): if (in_array($key,['month','cal_date'],true)) continue; ?><input type="hidden" name="<?= $ce($key) ?>" value="<?= $ce($v) ?>"><?php endforeach; ?><input type="hidden" name="cal_month" value="<?= (int)$calendar['first']->format('n') ?>"><label>Year<input class="form-control" type="number" name="cal_year" min="1" max="9999" value="<?= (int)$calendar['first']->format('Y') ?>" required></label><button class="btn btn-outline btn-sm">Go</button></form>
+                    </div>
+                </details>
+            </div>
+            <nav class="page-actions cal-view-switch" aria-label="Calendar view"><?php foreach (['month'=>'Month View','week'=>'Week View','list'=>'List View'] as $key=>$label): ?><a class="btn btn-sm <?= $calendar['view']===$key?'btn-primary':'btn-outline' ?>" href="<?= $ce($calUrl(['cal_view'=>$key])) ?>" <?= $calendar['view']===$key?'aria-current="true"':'' ?>><?= $label ?></a><?php endforeach; ?></nav>
+        </div>
+        <div class="card-body">
+            <form method="get" id="calendar-filter-form" class="cal-search-form">
+                <input type="hidden" name="route" value="preparedness-calendar"><input type="hidden" name="tab" value="activities">
+                <input type="hidden" name="month" value="<?= $ce($calendar['month']) ?>"><input type="hidden" name="cal_date" value="<?= $ce($calendar['focus']->format('Y-m-d')) ?>">
+                <input type="hidden" name="cal_view" value="<?= $ce($calendar['view']) ?>">
+                <label for="cal-search" class="cal-search-label"><span class="sr-only">Search activities</span><input class="form-control" type="search" id="cal-search" name="cal_search" maxlength="160" value="<?= $ce($calendar['search']) ?>" placeholder="Search activities, dates or puroks…" aria-describedby="cal-search-help"></label>
+                <label for="cal-status" class="cal-filter-label"><span class="sr-only">Activity filter</span><select class="form-control" id="cal-status" name="cal_status" data-auto-submit><?php foreach (['all'=>'All Activities','upcoming'=>'Upcoming','ongoing'=>'Ongoing','completed'=>'Completed','cancelled'=>'Cancelled','historical'=>'Historical Activities','postponed'=>'Postponed','urgent'=>'Urgent attention'] as $key=>$label): ?><option value="<?= $key ?>" <?= $calendar['status']===$key?'selected':'' ?>><?= $label ?></option><?php endforeach; ?></select></label>
+                <label class="cal-all-dates"><input type="checkbox" id="cal-scope" name="cal_scope" value="all" <?= $calendar['scope']==='all'?'checked':'' ?> data-auto-submit> All dates</label>
+                <button class="btn btn-outline btn-sm" type="submit" aria-label="Search activities">Search</button>
+                <?php if ($calendar['search']!=='' || $calendar['status']!=='all' || $calendar['scope']!=='month'): ?><a class="cal-clear" href="<?= $ce($calUrl(['cal_status'=>'all','cal_search'=>'','cal_scope'=>'month'])) ?>">Clear filters</a><?php endif; ?>
+            </form>
+            <p id="cal-search-help" class="sr-only">All dates searches the full archive. The grid always follows the displayed period. Historical dates do not prove completion.</p>
+            <?php if ($calendar['view']==='week'): ?><p class="field-hint"><?= $ce($calendar['start']->format('M j').' – '.$calendar['end']->format('M j, Y')) ?></p><?php endif; ?>
+            <details class="cal-status-guide"><summary>Status guide</summary><div class="cal-legend" aria-label="Activity status legend"><span class="cal-status cal-upcoming">Upcoming</span><span class="cal-status cal-completed">Completed</span><span class="cal-status cal-ongoing">Ongoing</span><span class="cal-status cal-cancelled">Cancelled</span><span class="cal-status cal-postponed">Postponed</span><span class="cal-status cal-urgent">Urgent attention</span><span class="cal-today-legend">Today (teal outline)</span></div></details>
+            <?php if ($calendar['view']!=='list'): ?>
+            <p class="sr-only">Select an activity for details, or +N more to view all activities on that date.</p>
+            <div class="calendar-scroll" tabindex="0" role="region" aria-label="<?= $calendar['view']==='week'?'Weekly':'Monthly' ?> activity calendar, Sunday through Saturday">
+                <div class="calendar-grid cal-weekdays"><?php foreach (['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'] as $day): ?><div><abbr title="<?= $day ?>"><?= substr($day,0,3) ?></abbr></div><?php endforeach; ?></div>
+                <div class="calendar-grid cal-days">
+                    <?php for ($blank=0;$blank<(int)$calendar['start']->format('w');$blank++): ?><div class="cal-blank" aria-hidden="true"></div><?php endfor; ?>
+                    <?php foreach ($calendar['days'] as $date=>$day): ?>
+                    <article class="cal-day-cell <?= $date===$calendar['today']?'is-today':'' ?> <?= $day['events']?'has-events':'' ?>" id="cal-day-<?= $ce($date) ?>" data-date="<?= $ce($date) ?>">
+                        <a class="cal-date-button" href="#cal-day-list-<?= $ce($date) ?>" data-calendar-day="<?= $ce($date) ?>" aria-label="<?= $ce($day['date']->format('l, F j, Y')) ?> — <?= count($day['events']) ?> activities" <?= $date===$calendar['today']?'aria-current="date"':'' ?>><span><?= $day['date']->format('j') ?></span><?php if ($date===$calendar['today']): ?><span class="cal-today-label">Today</span><?php endif; ?><?php if ($day['events']): ?><span class="cal-day-count"><?= count($day['events']) ?> <span class="sr-only">activities</span></span><?php endif; ?></a>
+                        <div class="cal-day-events" id="cal-day-list-<?= $ce($date) ?>"><?php $eventIndex=0; foreach ($day['events'] as $e): ?><a class="cal-event cal-<?= $ce($e['status_key']) ?>" href="#activity-card-<?= $e['id'] ?>" data-calendar-event="<?= $e['id'] ?>" title="<?= $ce($recorded($e['record']['title']??null).' · '.$e['status_label']) ?>" aria-label="<?= $ce($recorded($e['record']['title']??null).' · '.$e['status_label']) ?>" <?= $eventIndex++>=2?'hidden':'' ?>><span class="cal-event-title"><?= $ce($recorded($e['record']['title']??null)) ?></span><span class="cal-event-status"><?= $ce($e['status_label']) ?></span></a><?php endforeach; ?></div>
+                        <a class="cal-more" href="#eventCardsGrid" data-calendar-day="<?= $ce($date) ?>" data-more-for="<?= $ce($date) ?>" <?= count($day['events'])<=2?'hidden':'' ?>>+<?= max(0,count($day['events'])-2) ?> more</a>
+                    </article>
+                    <?php endforeach; ?>
+                    <?php $trailing=(7-(((int)$calendar['start']->format('w')+count($calendar['days']))%7))%7; for($blank=0;$blank<$trailing;$blank++): ?><div class="cal-blank" aria-hidden="true"></div><?php endfor; ?>
+                </div>
+            </div>
+            <?php if (!$calendar['visible']): ?><p class="cal-empty" role="status">No matching activities are recorded for this displayed period. Try another month or choose All dates.</p><?php endif; ?>
             <?php endif; ?>
-        </h2>
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
-            Interactive calendar schedules, post-drill evaluation reports, and assigned personnel / volunteer rosters.
-        </p>
-    </div>
-    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        <a href="index.php?route=preparedness" class="btn btn-outline"><i class="fa fa-list"></i> Table Roster</a>
-        <?php if (in_array($currentRole, ['Barangay Head', 'ICDRRMO'])): ?>
-            <a href="index.php?route=preparedness-create" class="btn btn-primary"><i class="fa fa-calendar-plus"></i> Schedule New Activity</a>
-        <?php endif; ?>
-    </div>
-</div>
-
-<!-- ============================================== -->
-<!-- 1. CALENDAR HIGHLIGHTS (METRICS & OVERVIEW) -->
-<!-- ============================================== -->
-<div class="grid-cols-4" style="margin-bottom: 24px;">
-    <div class="stat-card" style="border-left: 4px solid var(--primary-light);">
-        <div class="stat-label"><i class="fa fa-calendar-days text-primary"></i> Total Scheduled Events</div>
-        <div class="stat-value"><?= (int)($summary['total'] ?? count($activities)) ?></div>
-        <div class="stat-sub">Overall community readiness programs</div>
-    </div>
-
-    <div class="stat-card" style="border-left: 4px solid #f59e0b; background: linear-gradient(to bottom, #ffffff, #fffbeb);">
-        <div class="stat-label"><i class="fa fa-bolt-lightning text-warning"></i> Upcoming Drills</div>
-        <div class="stat-value" style="color: #b45309;"><?= count($upcoming) ?></div>
-        <div class="stat-sub">Next readiness exercises awaiting deployment</div>
-    </div>
-
-    <div class="stat-card" style="border-left: 4px solid #10b981; background: linear-gradient(to bottom, #ffffff, #f0fdf4);">
-        <div class="stat-label"><i class="fa fa-check-double text-success"></i> Past & Completed Events</div>
-        <div class="stat-value" style="color: #047857;"><?= count($past) ?></div>
-        <div class="stat-sub">Successfully conducted & evaluated drills</div>
-    </div>
-
-    <div class="stat-card" style="border-left: 4px solid #06b6d4;">
-        <div class="stat-label"><i class="fa fa-users-rays text-info"></i> Community Turnout</div>
-        <div class="stat-value"><?= number_format((int)($summary['total_turnout'] ?? 0)) ?></div>
-        <div class="stat-sub">Recorded resident attendees engaged</div>
-    </div>
-</div>
-
-<!-- ============================================================== -->
-<!-- 2. MONTHLY CALENDAR HIGHLIGHT MATRIX (VISUAL CALENDAR GRID) -->
-<!-- ============================================================== -->
-<div class="card" style="margin-bottom: 24px;">
-    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-        <div class="card-title">
-            <i class="fa fa-calendar-check text-primary"></i> Monthly Highlights & Activity Schedule
-        </div>
-
-        <!-- Month Navigation Controls -->
-        <div style="display: flex; align-items: center; gap: 8px;">
-            <a href="index.php?route=preparedness-calendar&month=<?= $prevMonth ?>" class="btn btn-outline btn-sm" title="Previous Month">
-                <i class="fa fa-chevron-left"></i> Prev
-            </a>
-            <span style="font-weight: 800; color: var(--primary-dark); font-size: 0.95rem; min-width: 130px; text-align: center;">
-                <?= $monthNameYear ?>
-            </span>
-            <a href="index.php?route=preparedness-calendar&month=<?= $nextMonth ?>" class="btn btn-outline btn-sm" title="Next Month">
-                Next <i class="fa fa-chevron-right"></i>
-            </a>
-            <?php if ($selectedMonthStr !== $currentMonthNum): ?>
-                <a href="index.php?route=preparedness-calendar&month=<?= $currentMonthNum ?>" class="btn btn-sm btn-outline" style="margin-left: 4px;" title="Jump to current month">
-                    Current Month
-                </a>
-            <?php endif; ?>
-        </div>
-
-        <!-- Status Legend -->
-        <div style="display: flex; align-items: center; gap: 12px; font-size: 0.8rem;">
-            <span style="display: inline-flex; align-items: center; gap: 5px;">
-                <span style="width: 10px; height: 10px; border-radius: 50%; background: #3b82f6; display: inline-block;"></span> Upcoming
-            </span>
-            <span style="display: inline-flex; align-items: center; gap: 5px;">
-                <span style="width: 10px; height: 10px; border-radius: 50%; background: #10b981; display: inline-block;"></span> Completed
-            </span>
-            <span style="display: inline-flex; align-items: center; gap: 5px;">
-                <span style="width: 10px; height: 10px; border-radius: 50%; background: #2563eb; display: inline-block; border: 2px solid #93c5fd;"></span> Today
-            </span>
+            <p class="field-hint" id="cal-results" role="status"><?= count($calendar['cards']) ?> matching activities in <?= $calendar['scope']==='all'?'all recorded dates':'the displayed period' ?>. Select an individual activity for details.</p>
         </div>
     </div>
-
-    <div class="card-body" style="padding: 16px;">
-        <p class="field-hint calendar-mobile-hint">Scroll across the calendar to see all days. Select a date to read its activities.</p>
-        <div class="calendar-scroll" tabindex="0" role="region" aria-label="Monthly activity calendar; scroll horizontally on small screens">
-        <div class="calendar-grid" style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; text-align: center; margin-bottom: 8px;">
-            <?php foreach (['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as $w): ?>
-                <div style="font-weight: 700; font-size: 0.78rem; color: var(--text-muted); padding: 6px 0;"><?= $w ?></div>
-            <?php endforeach; ?>
-        </div>
-
-        <div class="calendar-grid" style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px;">
-            <!-- Blank leading days -->
-            <?php for ($i = 0; $i < $firstDayOfWeek; $i++): ?>
-                <div style="min-height: 96px; background: #f8fafc; border: 1px dashed var(--border-light); border-radius: 8px; opacity: 0.4;"></div>
-            <?php endfor; ?>
-
-            <!-- Calendar Days -->
-            <?php for ($d = 1; $d <= $daysInMonth; $d++): ?>
-                <?php
-                    $dateStr = sprintf('%s-%02d', $selectedMonthStr, $d);
-                    $isToday = ($dateStr === $todayDateStr);
-                    $hasEvents = !empty($activitiesByDay[$d]);
-                    $eventsCount = $hasEvents ? count($activitiesByDay[$d]) : 0;
-                    $dayFormattedLong = date('l, F d, Y', strtotime($dateStr));
-                ?>
-                <div class="cal-day-cell <?= $isToday ? 'is-today' : '' ?> <?= $hasEvents ? 'has-events' : '' ?>"
-                     id="cal-day-<?= $dateStr ?>"
-                     onclick="openDateDetails('<?= $dateStr ?>')"
-                     title="Click to view details for <?= htmlspecialchars($dayFormattedLong) ?>">
-                    
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-size: 0.85rem; font-weight: <?= $isToday ? '800' : '600' ?>; color: <?= $isToday ? '#1d4ed8' : 'var(--text-primary)' ?>;">
-                            <?= $d ?>
-                        </span>
-                        <div>
-                            <?php if ($isToday): ?>
-                                <span style="background: #2563eb; color: #fff; font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 700;">TODAY</span>
-                            <?php endif; ?>
-                            <?php if ($eventsCount > 0): ?>
-                                <span class="badge badge-info" style="font-size: 9px; padding: 1px 4px; border-radius: 3px;">
-                                    <?= $eventsCount ?>
-                                </span>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-
-                    <?php if ($hasEvents): ?>
-                        <div style="margin-top: 4px; display: flex; flex-direction: column; gap: 3px;">
-                            <?php foreach ($activitiesByDay[$d] as $ev): ?>
-                                <?php $isComp = ($ev['status'] === 'Completed'); ?>
-                                <div style="font-size: 0.68rem; padding: 2px 5px; border-radius: 4px; background: <?= $isComp ? '#10b981' : '#3b82f6' ?>; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;" 
-                                     title="<?= htmlspecialchars($ev['title']) ?> (<?= $ev['activity_type'] ?>)">
-                                    <?= htmlspecialchars($ev['title']) ?>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                    <?php else: ?>
-                        <div style="flex: 1;"></div>
-                    <?php endif; ?>
-                    
-                    <div style="display: flex; justify-content: flex-end; margin-top: 2px;">
-                        <span style="font-size: 9px; color: #94a3b8; opacity: 0.8;">
-                            <i class="fa fa-circle-info"></i>
-                        </span>
-                    </div>
-                </div>
-            <?php endfor; ?>
-        </div>
-
-        </div>
-        <!-- Inline Selected Date Notification / Quick Action -->
-        <div id="inlineDateBanner" style="margin-top: 14px; padding: 10px 14px; background: #f8fafc; border: 1px solid var(--border-light); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <i class="fa fa-hand-pointer text-primary"></i>
-                <span id="inlineDateText" style="font-size: 0.85rem; color: var(--text-primary); font-weight: 600;">
-                    Click any date on the calendar above to view all scheduled activity details, personnel, and evaluations.
-                </span>
+    <details class="cal-records" open><summary><?= $calendar['view']==='list'?'Chronological activity list':'Activities & details' ?> <span><?= count($calendar['cards']) ?></span></summary>
+    <div class="<?= $calendar['view']==='list'?'cal-list-view':'grid-cols-2' ?>" id="eventCardsGrid">
+    <?php foreach ($detailEvents as $event): $act=$event['record']; ?>
+        <article class="card event-activity-card" id="activity-card-<?= $event['id'] ?>" <?= !isset($calendar['cards'][$event['id']])?'hidden':'' ?>>
+            <div class="cal-detail-content">
+                <?php require __DIR__.'/calendar_activity.php'; ?>
             </div>
-            <div id="inlineDateActions"></div>
-        </div>
-    </div>
-</div>
-
-<!-- ============================================== -->
-<!-- 3. INTERACTIVE FILTER TABS -->
-<!-- ============================================== -->
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; flex-wrap: wrap; gap: 10px;">
-    <div style="display: flex; gap: 6px;" id="eventFilterTabs">
-        <button type="button" class="btn btn-sm btn-primary" onclick="filterEvents('all', this)">
-            <i class="fa fa-layer-group"></i> All Events (<?= count($activities) ?>)
-        </button>
-        <button type="button" class="btn btn-sm btn-outline" onclick="filterEvents('upcoming', this)">
-            <i class="fa fa-calendar-plus text-warning"></i> Upcoming Drills (<?= count($upcoming) ?>)
-        </button>
-        <button type="button" class="btn btn-sm btn-outline" onclick="filterEvents('past', this)">
-            <i class="fa fa-clock-rotate-left text-success"></i> Past Events Archive (<?= count($past) ?>)
-        </button>
-    </div>
-    <div style="font-size: 0.8rem; color: var(--text-muted);">
-        <i class="fa fa-shield-halved text-primary"></i> Every drill records dedicated personnel and volunteer assignments.
-    </div>
-</div>
-
-<!-- ============================================================== -->
-<!-- 4. ACTIVITY EVENT CARDS (UPCOMING & PAST WITH ASSIGNED PERSONNEL) -->
-<!-- ============================================================== -->
-<div class="grid-cols-2" id="eventCardsGrid">
-    <?php foreach ($activities as $act): ?>
-        <?php 
-            $isPast = ($act['status'] === 'Completed' || strtotime($act['schedule_date']) < time());
-            $borderColor = $isPast ? '#10b981' : '#2563eb';
-            $filterCategory = $isPast ? 'past' : 'upcoming';
-        ?>
-        <div class="card event-activity-card" 
-             id="activity-card-<?= $act['preparedness_activities_id'] ?>" 
-             data-category="<?= $filterCategory ?>"
-             style="border-top: 4px solid <?= $borderColor ?>; display: flex; flex-direction: column; justify-content: space-between;">
-            
-            <div class="card-header" style="background: <?= $isPast ? '#f0fdf4' : '#f8fafc' ?>;">
-                <div>
-                    <span class="badge badge-info"><?= htmlspecialchars($act['activity_type']) ?></span>
-                    <?php if ($isPast): ?>
-                        <span class="badge badge-success" style="margin-left: 6px;"><i class="fa fa-check"></i> Past Event</span>
-                    <?php else: ?>
-                        <span class="badge badge-warning" style="margin-left: 6px;"><i class="fa fa-clock"></i> Upcoming</span>
-                    <?php endif; ?>
-                </div>
-                <strong style="color: var(--primary-dark); font-size: 0.95rem;">
-                    #<?= $act['preparedness_activities_id'] ?>
-                </strong>
-            </div>
-
-            <div class="card-body" style="flex: 1;">
-                <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--primary-dark); margin: 0 0 8px 0;">
-                    <?= htmlspecialchars($act['title']) ?>
-                </h3>
-
-                <p style="font-size: 0.86rem; margin-bottom: 14px; color: var(--text-secondary); line-height: 1.45;">
-                    <?= nl2br(htmlspecialchars($act['description'])) ?>
-                </p>
-
-                <!-- Logistics & Venue Details -->
-                <div style="padding: 10px 12px; background: #f8fafc; border-radius: 6px; font-size: 0.82rem; margin-bottom: 12px; border: 1px solid var(--border-light); display: grid; grid-template-columns: 1fr; gap: 6px;">
-                    <div>
-                        <i class="fa fa-calendar-day text-primary" style="width: 16px;"></i> 
-                        <strong>Schedule:</strong> <?= date('F d, Y — h:i A', strtotime($act['schedule_date'])) ?>
-                    </div>
-                    <div>
-                        <i class="fa fa-location-dot text-danger" style="width: 16px;"></i> 
-                        <strong>Venue / Location:</strong> <?= htmlspecialchars($act['location']) ?>
-                    </div>
-                    <div>
-                        <i class="fa fa-bullseye text-warning" style="width: 16px;"></i> 
-                        <strong>Target Area:</strong> <?= htmlspecialchars($act['purok_name'] ?? 'All Hinaplanon Puroks') ?>
-                    </div>
-                    <div>
-                        <i class="fa fa-users text-info" style="width: 16px;"></i> 
-                        <strong>Capacity / Expected:</strong> <?= (int)$act['max_participants'] ?> participants
-                    </div>
-                </div>
-
-                <!-- ASSIGNED PERSONNEL & VOLUNTEER ROSTER SECTION -->
-                <div style="padding: 10px 12px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem; margin-bottom: 12px;">
-                    <div style="font-weight: 700; color: var(--primary-dark); margin-bottom: 6px; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em;">
-                        <i class="fa fa-id-badge text-primary"></i> Event Personnel & Volunteer Assignments
-                    </div>
-                    <div style="margin-bottom: 4px;">
-                        <span class="badge badge-primary" style="font-size: 0.75rem; margin-right: 4px;">
-                            <i class="fa fa-user-shield"></i> Assigned Personnel
-                        </span>
-                        <strong style="color: var(--primary-dark);">
-                            <?= htmlspecialchars($act['assigned_personnel'] ?: 'BDRRMC Officer In-Charge') ?>
-                        </strong>
-                    </div>
-                    <div>
-                        <span class="badge badge-success" style="font-size: 0.75rem; margin-right: 4px;">
-                            <i class="fa fa-hand-holding-heart"></i> Volunteer Person / Team
-                        </span>
-                        <span style="color: var(--text-secondary); font-weight: 600;">
-                            <?= htmlspecialchars($act['volunteer_person'] ?: 'Purok Disaster Volunteers & Youth Council') ?>
-                        </span>
-                    </div>
-                </div>
-
-                <!-- PAST EVENT EVALUATION SECTION -->
-                <?php if ($isPast && !empty($act['evaluation_id'])): ?>
-                    <div style="padding: 12px; background: #f0fdf4; border-radius: 6px; font-size: 0.82rem; border-left: 4px solid var(--success); border: 1px solid #bbf7d0;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                            <strong style="color: #166534; font-size: 0.88rem;">
-                                <i class="fa fa-star text-warning"></i> Post-Activity Evaluation Report
-                            </strong>
-                            <span class="badge badge-success"><?= (int)$act['actual_turnout'] ?> Attended</span>
-                        </div>
-                        <div style="margin-bottom: 4px;">
-                            <strong>Turnout Rating:</strong> 
-                            <span style="color: #d97706; font-weight: 700;">
-                                <?php for ($s = 1; $s <= 5; $s++): ?>
-                                    <i class="fa fa-star<?= $s <= (int)$act['objectives_met_rating'] ? '' : '-o' ?>"></i>
-                                <?php endfor; ?>
-                                (<?= (int)$act['objectives_met_rating'] ?> / 5 Stars)
-                            </span>
-                        </div>
-                        <?php if (!empty($act['problems_encountered'])): ?>
-                            <div style="color: #334155; margin-top: 4px;">
-                                <strong>Feedback / Observations:</strong> <?= htmlspecialchars($act['problems_encountered']) ?>
-                            </div>
-                        <?php endif; ?>
-                        <?php if (!empty($act['recommendations_for_improvement'])): ?>
-                            <div style="color: #166534; font-style: italic; margin-top: 4px;">
-                                <strong>Next Improvement:</strong> <?= htmlspecialchars($act['recommendations_for_improvement']) ?>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                <?php elseif ($isPast && in_array($currentRole, ['Barangay Head', 'ICDRRMO', 'Responder'])): ?>
-                    <div style="padding: 10px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; font-size: 0.8rem; display: flex; justify-content: space-between; align-items: center;">
-                        <span style="color: #92400e;">Event concluded. Awaiting post-drill evaluation submission.</span>
-                        <a href="index.php?route=preparedness-evaluate&id=<?= $act['preparedness_activities_id'] ?>" class="btn btn-warning btn-sm">
-                            <i class="fa fa-clipboard-check"></i> Evaluate Now
-                        </a>
-                    </div>
-                <?php endif; ?>
-            </div>
-
-            <div class="card-footer" style="background: #ffffff; padding: 12px 16px; border-top: 1px solid var(--border-light); display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.78rem; color: var(--text-muted);">
-                    Organized by: <?= htmlspecialchars($act['organizer_first'] ?? 'BDRRMC') ?> <?= htmlspecialchars($act['organizer_last'] ?? 'Admin') ?>
-                </span>
-                <?php if ($act['status'] === 'Scheduled' && in_array($currentRole, ['Barangay Head', 'ICDRRMO', 'Responder'])): ?>
-                    <a href="index.php?route=preparedness-evaluate&id=<?= $act['preparedness_activities_id'] ?>" class="btn btn-outline btn-sm">
-                        <i class="fa fa-clipboard-check"></i> Record Evaluation
-                    </a>
-                <?php endif; ?>
-            </div>
-        </div>
+            <div class="card-footer page-actions"><a class="btn btn-outline btn-sm" href="#activity-card-<?= $event['id'] ?>" data-calendar-event="<?= $event['id'] ?>">View activity details</a></div>
+        </article>
     <?php endforeach; ?>
-</div>
-
-<!-- ============================================== -->
-<!-- 5. DATE DETAILS MODAL DIALOG -->
-<!-- ============================================== -->
-<div id="dateDetailsModal" class="cal-modal-backdrop" onclick="closeModalOnBackdrop(event)">
-    <div class="cal-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="calModalDateTitle">
-        <div class="cal-modal-header">
-            <div>
-                <span class="badge badge-primary" id="calModalBadge" style="margin-bottom: 4px; display: inline-block;">
-                    <i class="fa fa-calendar-day"></i> Selected Date
-                </span>
-                <h3 id="calModalDateTitle" style="margin: 0; font-size: 1.25rem; font-weight: 800; color: var(--primary-dark);">
-                    <!-- Populated via JavaScript -->
-                </h3>
-                <div id="calModalDateSubtitle" style="font-size: 0.82rem; color: var(--text-muted); margin-top: 2px;">
-                    <!-- Activity count -->
-                </div>
-            </div>
-            <button type="button" class="cal-modal-close" onclick="closeDateDetailsModal()" aria-label="Close details dialog">&times;</button>
-        </div>
-
-        <div class="cal-modal-body" id="calModalBody">
-            <!-- Populated via JavaScript -->
-        </div>
-
-        <div class="cal-modal-footer">
-            <div id="calModalFooterAction"></div>
-            <button type="button" class="btn btn-outline btn-sm" onclick="closeDateDetailsModal()">Close Window</button>
-        </div>
+    </div>
+    <?php if (!$calendar['cards']): ?><div class="cal-empty">No activities match the selected search, filter and date range.</div><?php endif; ?>
+    </details>
+</section>
+<div id="dateDetailsModal" class="cal-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="calModalDateTitle">
+    <div class="cal-modal-dialog">
+        <div class="cal-modal-header"><h3 id="calModalDateTitle">Activity details</h3><button class="cal-modal-close" type="button" data-calendar-close aria-label="Close details dialog">×</button></div>
+        <div class="cal-modal-body" id="calModalBody"></div>
+        <div class="cal-modal-footer"><span>Asia/Manila · Recorded schedules only</span><div id="calModalFooterAction"></div><button class="btn btn-outline" type="button" data-calendar-close>Close Window</button></div>
     </div>
 </div>
-
-<script>
-    const calendarEvents = <?= json_encode($calendarJsonData, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
-    const canSchedule = <?= in_array($currentRole, ['Barangay Head', 'ICDRRMO']) ? 'true' : 'false' ?>;
-    const canEvaluate = <?= in_array($currentRole, ['Barangay Head', 'ICDRRMO', 'Responder']) ? 'true' : 'false' ?>;
-    let selectedActiveDate = null;
-
-    function escapeHtml(text) {
-        if (!text) return '';
-        const map = {
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#039;'
-        };
-        return text.toString().replace(/[&<>"']/g, function(m) { return map[m]; });
-    }
-
-    function formatDateFriendly(dateStr) {
-        try {
-            const parts = dateStr.split('-');
-            if (parts.length === 3) {
-                const dateObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-                return dateObj.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-            }
-        } catch(e) {}
-        return dateStr;
-    }
-
-    function openDateDetails(dateStr) {
-        selectedActiveDate = dateStr;
-        const formattedDate = formatDateFriendly(dateStr);
-        const dayEvents = calendarEvents[dateStr] || [];
-
-        // 1. Highlight active day in grid
-        document.querySelectorAll('.cal-day-cell').forEach(el => el.classList.remove('cal-day-active'));
-        const activeCell = document.getElementById('cal-day-' + dateStr);
-        if (activeCell) {
-            activeCell.classList.add('cal-day-active');
-        }
-
-        // 2. Update inline banner
-        const inlineText = document.getElementById('inlineDateText');
-        const inlineActions = document.getElementById('inlineDateActions');
-        if (dayEvents.length > 0) {
-            inlineText.innerHTML = `<strong>Selected: ${formattedDate}</strong> — <span class="badge badge-success" style="margin-left: 4px;">${dayEvents.length} Activity Found</span> (${escapeHtml(dayEvents[0].title)})`;
-            inlineActions.innerHTML = `<button type="button" class="btn btn-primary btn-sm" onclick="openDateDetailsModal()"><i class="fa fa-expand"></i> View Full Details</button>`;
-        } else {
-            inlineText.innerHTML = `<strong>Selected: ${formattedDate}</strong> — <span class="text-muted">No drills scheduled for this date.</span>`;
-            if (canSchedule) {
-                inlineActions.innerHTML = `<a href="index.php?route=preparedness-create&date=${dateStr}" class="btn btn-primary btn-sm"><i class="fa fa-calendar-plus"></i> Schedule Drill</a>`;
-            } else {
-                inlineActions.innerHTML = `<button type="button" class="btn btn-outline btn-sm" onclick="openDateDetailsModal()"><i class="fa fa-eye"></i> View Date Status</button>`;
-            }
-        }
-
-        // 3. Render Modal Content
-        renderModalContent(dateStr, formattedDate, dayEvents);
-
-        // 4. Show Modal Dialog
-        openDateDetailsModal();
-    }
-
-    function renderModalContent(dateStr, formattedDate, dayEvents) {
-        const titleEl = document.getElementById('calModalDateTitle');
-        const subtitleEl = document.getElementById('calModalDateSubtitle');
-        const badgeEl = document.getElementById('calModalBadge');
-        const bodyEl = document.getElementById('calModalBody');
-        const footerActionEl = document.getElementById('calModalFooterAction');
-
-        titleEl.textContent = formattedDate;
-
-        if (dayEvents.length > 0) {
-            badgeEl.className = 'badge badge-success';
-            badgeEl.innerHTML = `<i class="fa fa-calendar-check"></i> Scheduled Event Day`;
-            subtitleEl.textContent = `${dayEvents.length} preparedness ${dayEvents.length === 1 ? 'activity' : 'activities'} scheduled on this day.`;
-
-            let html = '';
-            dayEvents.forEach(act => {
-                const borderLeftColor = act.is_past ? '#10b981' : '#2563eb';
-                const statusBadge = act.is_past 
-                    ? `<span class="badge badge-success"><i class="fa fa-check"></i> Past / Completed</span>` 
-                    : `<span class="badge badge-warning"><i class="fa fa-clock"></i> Upcoming Drill</span>`;
-
-                // Post-Activity Evaluation block if available
-                let evalBlockHtml = '';
-                if (act.evaluation) {
-                    let starIcons = '';
-                    for (let s = 1; s <= 5; s++) {
-                        starIcons += `<i class="fa fa-star${s <= act.evaluation.rating ? '' : '-o'}"></i>`;
-                    }
-                    evalBlockHtml = `
-                        <div style="padding: 12px; background: #f0fdf4; border-radius: 6px; font-size: 0.82rem; border-left: 4px solid var(--success); border: 1px solid #bbf7d0; margin-top: 10px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                <strong style="color: #166534; font-size: 0.88rem;">
-                                    <i class="fa fa-star text-warning"></i> Post-Activity Evaluation Report
-                                </strong>
-                                <span class="badge badge-success">${act.evaluation.actual_turnout} Attended</span>
-                            </div>
-                            <div style="margin-bottom: 4px;">
-                                <strong>Turnout Rating:</strong> 
-                                <span style="color: #d97706; font-weight: 700;">
-                                    ${starIcons} (${act.evaluation.rating} / 5 Stars)
-                                </span>
-                            </div>
-                            ${act.evaluation.problems ? `
-                                <div style="color: #334155; margin-top: 4px;">
-                                    <strong>Feedback / Observations:</strong> ${escapeHtml(act.evaluation.problems)}
-                                </div>
-                            ` : ''}
-                            ${act.evaluation.recommendations ? `
-                                <div style="color: #166534; font-style: italic; margin-top: 4px;">
-                                    <strong>Next Improvement:</strong> ${escapeHtml(act.evaluation.recommendations)}
-                                </div>
-                            ` : ''}
-                        </div>
-                    `;
-                } else if (act.is_past && canEvaluate) {
-                    evalBlockHtml = `
-                        <div style="padding: 10px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; font-size: 0.8rem; display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
-                            <span style="color: #92400e;">Event concluded. Awaiting post-drill evaluation submission.</span>
-                            <a href="index.php?route=preparedness-evaluate&id=${act.id}" class="btn btn-warning btn-sm">
-                                <i class="fa fa-clipboard-check"></i> Evaluate Now
-                            </a>
-                        </div>
-                    `;
-                }
-
-                // Action buttons
-                let actionsHtml = '';
-                if (!act.is_past && canEvaluate) {
-                    actionsHtml += `
-                        <a href="index.php?route=preparedness-evaluate&id=${act.id}" class="btn btn-outline btn-sm">
-                            <i class="fa fa-clipboard-check"></i> Record Evaluation
-                        </a>
-                    `;
-                }
-                actionsHtml += `
-                    <button type="button" class="btn btn-outline btn-sm" onclick="jumpToCard(${act.id})">
-                        <i class="fa fa-arrow-down"></i> Scroll to Card
-                    </button>
-                `;
-
-                html += `
-                    <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; background: #ffffff; border-left: 5px solid ${borderLeftColor}; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 6px;">
-                            <div style="display: flex; gap: 6px; align-items: center;">
-                                <span class="badge badge-info">${escapeHtml(act.type)}</span>
-                                ${statusBadge}
-                            </div>
-                            <span style="font-size: 0.8rem; font-weight: 700; color: var(--primary-dark);">
-                                Activity #${act.id}
-                            </span>
-                        </div>
-
-                        <h4 style="margin: 0 0 8px 0; font-size: 1.1rem; font-weight: 800; color: var(--primary-dark);">
-                            ${escapeHtml(act.title)}
-                        </h4>
-
-                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0 0 12px 0; line-height: 1.45;">
-                            ${escapeHtml(act.description)}
-                        </p>
-
-                        <!-- Logistics Details Grid -->
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 12px; background: #f8fafc; border-radius: 6px; font-size: 0.8rem; margin-bottom: 12px; border: 1px solid #e2e8f0;">
-                            <div>
-                                <i class="fa fa-clock text-primary" style="width: 16px;"></i>
-                                <strong>Time:</strong> ${act.time}
-                            </div>
-                            <div>
-                                <i class="fa fa-location-dot text-danger" style="width: 16px;"></i>
-                                <strong>Venue:</strong> ${escapeHtml(act.location)}
-                            </div>
-                            <div>
-                                <i class="fa fa-bullseye text-warning" style="width: 16px;"></i>
-                                <strong>Coverage:</strong> ${escapeHtml(act.purok_name)}
-                            </div>
-                            <div>
-                                <i class="fa fa-users text-info" style="width: 16px;"></i>
-                                <strong>Capacity:</strong> ${act.max_participants} attendees
-                            </div>
-                        </div>
-
-                        <!-- Assigned Lead Personnel & Volunteers -->
-                        <div style="padding: 10px 12px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.82rem; margin-bottom: 10px;">
-                            <div style="font-weight: 700; color: var(--primary-dark); margin-bottom: 6px; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em;">
-                                <i class="fa fa-id-badge text-primary"></i> Event Personnel & Volunteer Assignments
-                            </div>
-                            <div style="margin-bottom: 4px;">
-                                <span class="badge badge-primary" style="font-size: 0.72rem; margin-right: 4px;">
-                                    <i class="fa fa-user-shield"></i> Assigned Personnel
-                                </span>
-                                <strong style="color: var(--primary-dark);">${escapeHtml(act.assigned_personnel)}</strong>
-                            </div>
-                            <div>
-                                <span class="badge badge-success" style="font-size: 0.72rem; margin-right: 4px;">
-                                    <i class="fa fa-hand-holding-heart"></i> Volunteer Person / Team
-                                </span>
-                                <span style="color: var(--text-secondary); font-weight: 600;">${escapeHtml(act.volunteer_person)}</span>
-                            </div>
-                        </div>
-
-                        ${evalBlockHtml}
-
-                        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; border-top: 1px solid #f1f5f9; padding-top: 10px;">
-                            ${actionsHtml}
-                        </div>
-                    </div>
-                `;
-            });
-
-            bodyEl.innerHTML = html;
-
-            if (canSchedule) {
-                footerActionEl.innerHTML = `
-                    <a href="index.php?route=preparedness-create&date=${dateStr}" class="btn btn-primary btn-sm">
-                        <i class="fa fa-calendar-plus"></i> Add Another Drill on This Date
-                    </a>
-                `;
-            } else {
-                footerActionEl.innerHTML = `
-                    <span style="font-size: 0.8rem; color: var(--text-muted);">
-                        <i class="fa fa-shield-halved text-primary"></i> Hinaplanon Disaster Preparedness Operations
-                    </span>
-                `;
-            }
-
-        } else {
-            // Empty State
-            badgeEl.className = 'badge badge-outline';
-            badgeEl.innerHTML = `<i class="fa fa-calendar"></i> No Scheduled Activities`;
-            subtitleEl.textContent = `No drills or simulation exercises are recorded for this date.`;
-
-            let emptyHtml = `
-                <div style="text-align: center; padding: 36px 16px;">
-                    <div style="width: 64px; height: 64px; border-radius: 50%; background: #eff6ff; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 14px;">
-                        <i class="fa fa-calendar-day" style="font-size: 1.8rem; color: #3b82f6;"></i>
-                    </div>
-                    <h4 style="margin: 0 0 6px 0; font-size: 1.15rem; font-weight: 800; color: var(--primary-dark);">
-                        No Preparedness Drills on this Date
-                    </h4>
-                    <p style="color: var(--text-muted); font-size: 0.88rem; max-width: 420px; margin: 0 auto 20px auto; line-height: 1.5;">
-                        There are currently no community flood evacuations, first-aid seminars, or disaster orientations scheduled on <strong>${formattedDate}</strong>.
-                    </p>
-            `;
-
-            if (canSchedule) {
-                emptyHtml += `
-                    <a href="index.php?route=preparedness-create&date=${dateStr}" class="btn btn-primary">
-                        <i class="fa fa-calendar-plus"></i> Schedule Preparedness Drill on This Date
-                    </a>
-                `;
-            } else {
-                emptyHtml += `
-                    <span style="font-size: 0.82rem; color: var(--text-muted); background: #f8fafc; border: 1px solid var(--border-light); padding: 6px 14px; border-radius: 20px;">
-                        <i class="fa fa-info-circle text-primary"></i> Check back regularly for updates from BDRRMC Hinaplanon.
-                    </span>
-                `;
-            }
-
-            emptyHtml += `</div>`;
-            bodyEl.innerHTML = emptyHtml;
-            footerActionEl.innerHTML = '';
-        }
-    }
-
-    function openDateDetailsModal() {
-        const modal = document.getElementById('dateDetailsModal');
-        if (modal) {
-            modal.classList.add('is-open');
-            document.body.style.overflow = 'hidden';
-        }
-    }
-
-    function closeDateDetailsModal() {
-        const modal = document.getElementById('dateDetailsModal');
-        if (modal) {
-            modal.classList.remove('is-open');
-            document.body.style.overflow = '';
-        }
-    }
-
-    function closeModalOnBackdrop(event) {
-        if (event.target && event.target.id === 'dateDetailsModal') {
-            closeDateDetailsModal();
-        }
-    }
-
-    function jumpToCard(id) {
-        closeDateDetailsModal();
-        const card = document.getElementById('activity-card-' + id);
-        if (card) {
-            const cat = card.getAttribute('data-category');
-            const allBtn = document.querySelector('#eventFilterTabs button:first-child');
-            if (allBtn) {
-                filterEvents('all', allBtn);
-            }
-            setTimeout(() => {
-                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                card.style.transition = 'box-shadow 0.3s ease, border-color 0.3s ease';
-                card.style.boxShadow = '0 0 0 4px rgba(37, 99, 235, 0.45)';
-                setTimeout(() => {
-                    card.style.boxShadow = '';
-                }, 2500);
-            }, 150);
-        }
-    }
-
-    function filterEvents(category, buttonElement) {
-        // Toggle active button style
-        const buttons = document.querySelectorAll('#eventFilterTabs button');
-        buttons.forEach(btn => {
-            btn.classList.remove('btn-primary');
-            btn.classList.add('btn-outline');
-        });
-        buttonElement.classList.remove('btn-outline');
-        buttonElement.classList.add('btn-primary');
-
-        // Filter cards
-        const cards = document.querySelectorAll('.event-activity-card');
-        cards.forEach(card => {
-            const cardCategory = card.getAttribute('data-category');
-            if (category === 'all' || cardCategory === category) {
-                card.style.display = 'flex';
-            } else {
-                card.style.display = 'none';
-            }
-        });
-    }
-
-    // Keyboard support: Escape key closes modal
-    document.addEventListener('keydown', function(event) {
-        if (event.key === 'Escape' || event.keyCode === 27) {
-            closeDateDetailsModal();
-        }
-    });
-</script>
+<script type="application/json" id="calendar-day-data"><?= json_encode($jsonDays,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_INVALID_UTF8_SUBSTITUTE) ?></script>
+<script src="assets/js/activity-calendar.js?v=20261106-calendar2" defer></script>

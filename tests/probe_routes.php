@@ -1,4 +1,11 @@
 <?php
+// Match the production App autoloader when new model dependencies are introduced.
+spl_autoload_register(static function ($class) {
+    if (str_starts_with($class, 'App\\')) {
+        $file=__DIR__.'/../src/'.str_replace('\\','/',substr($class,4)).'.php';
+        if (is_file($file)) require_once $file;
+    }
+});
 // tests/probe_routes.php
 
 error_reporting(E_ALL & ~E_WARNING);

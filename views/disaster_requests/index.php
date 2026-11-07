@@ -7,11 +7,13 @@
         <p style="font-size: 0.85rem; color: var(--text-muted);">Barangay Hinaplanon incident request records linked to Decision Tree prioritization.</p>
     </div>
     <div style="display: flex; gap: 8px;">
-        <a href="index.php?route=disaster-requests-create" class="btn btn-primary">
-            <i class="fa fa-file-circle-plus"></i> Fill Up Disaster Request Form
-        </a>
+        <?php if ($currentRole==='Barangay Head'): ?><a href="index.php?route=disaster-requests-create" class="btn btn-primary"><i class="fa fa-file-circle-plus"></i> Disaster Resource Request Form</a><?php endif; ?>
     </div>
 </div>
+
+<?php if (in_array($currentRole,['Barangay Head','ICDRRMO'],true)): ?>
+<section class="card" style="margin-bottom:24px"><div class="card-header"><h3 class="card-title"><?= $currentRole==='ICDRRMO'?'Disaster Resource Request Review Queue':'My Resource Requests & Drafts' ?></h3></div><div class="table-responsive"><table class="table"><thead><tr><th>Reference</th><th>Workflow state</th><th>AI assessment</th><th>Updated</th><th>Action</th></tr></thead><tbody><?php foreach (($intakes??[]) as $r): ?><tr><td style="overflow-wrap:anywhere"><?= htmlspecialchars($r['reference_no']) ?></td><td><?= htmlspecialchars($r['state']) ?></td><td><?= htmlspecialchars($r['ml_status']) ?></td><td><?= htmlspecialchars($r['updated_at']) ?></td><td><a class="btn btn-outline btn-sm" href="index.php?route=disaster-requests-resource-show&amp;id=<?= (int)$r['intake_id'] ?>">View request</a></td></tr><?php endforeach; if (empty($intakes)): ?><tr><td colspan="5"><?= $currentRole==='ICDRRMO'?'No submitted resource requests. Private drafts are not visible to reviewers.':'No resource requests or drafts saved yet.' ?></td></tr><?php endif; ?></tbody></table></div></section>
+<?php endif; ?>
 
 <div class="card">
     <div class="card-header" style="flex-wrap: wrap; gap: 10px;">

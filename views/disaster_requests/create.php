@@ -1,130 +1,36 @@
-<!-- views/disaster_requests/create.php -->
 <?php
-use App\Core\Auth;
-$currentRole = Auth::role();
-?>
-
-<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; flex-wrap: wrap; gap: 12px; max-width: 780px; margin-left: auto; margin-right: auto;">
-    <div>
-        <h2 style="font-size: 1.4rem; font-weight: 800; color: var(--primary-dark); margin: 0;">
-            <i class="fa fa-file-circle-plus text-primary"></i> Fill Up Disaster Request Form
-        </h2>
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 4px;">
-            Official disaster incident logging and relief assistance intake for automated Decision Tree ML prioritization.
-        </p>
-    </div>
-    <?php if (in_array($currentRole, ['Barangay Head', 'ICDRRMO'])): ?>
-        <div style="display: flex; gap: 8px;">
-            <a href="index.php?route=disaster-requests" class="btn btn-outline btn-sm">
-                <i class="fa fa-list-check"></i> View Request Records
-            </a>
+use App\Support\ResourceRequestInput as Input;
+$e=static fn($v)=>htmlspecialchars((string)($v??''),ENT_QUOTES,'UTF-8');
+$v=static fn($key)=>$values[$key]??'';
+$field=static function($key,$label,$type='number',$required=false,$max='100000000') use($e,$v,$errors) { ?>
+    <div class="form-group"><label for="resource-<?= $e($key) ?>" class="form-label"><?= $e($label) ?><?= $required?' *':'' ?></label>
+    <input class="form-control" id="resource-<?= $e($key) ?>" name="<?= $e($key) ?>" type="<?= $e($type) ?>" value="<?= $e($v($key)) ?>" <?= $type==='number'?'min="0" max="'.$e($max).'" step="1"':'' ?> <?= $type==='text'?'maxlength="'.$e($max).'"':'' ?> <?= $required?'required':'' ?> <?= isset($errors[$key])?'aria-invalid="true" aria-describedby="error-'.$e($key).'"':'' ?>>
+    <?php if (isset($errors[$key])): ?><small class="text-danger" id="error-<?= $e($key) ?>"><?= $e($errors[$key]) ?></small><?php endif; ?></div>
+<?php }; ?>
+<link rel="stylesheet" href="assets/css/disaster-resource-request.css?v=20261106-1">
+<div class="page-heading"><div><div class="page-kicker">Barangay Head · Official request intake</div><h2>Disaster Resource Request Form</h2><p class="page-description">Save a private draft or submit recorded needs for independent ICDRRMO review.</p></div><a class="btn btn-outline" href="index.php?route=disaster-requests">Request history</a></div>
+<?php if (!$storageReady): ?><div class="alert alert-warning"><div>Resource-request storage is not installed. An administrator must run <code>php database/migrations/20261106_disaster_resource_requests.php</code>. No request can be submitted until migration succeeds.</div></div><?php endif; ?>
+<?php if ($errors): ?><div class="alert alert-danger" role="alert"><div><strong>Please correct the following:</strong><ul><?php foreach ($errors as $key=>$message): ?><li><?= $e(str_replace('_',' ',$key)) ?>: <?= $e($message) ?></li><?php endforeach; ?></ul></div></div><?php endif; ?>
+<form method="post" action="index.php?route=disaster-requests-create" class="resource-request-form">
+    <input type="hidden" name="csrf_token" value="<?= $e($csrfToken) ?>"><input type="hidden" name="intake_id" value="<?= (int)($intake['intake_id']??0) ?>"><input type="hidden" name="revision" value="<?= (int)($intake['revision']??0) ?>"><input type="hidden" name="operation_key" value="<?= $e($operationKey) ?>">
+    <fieldset class="card"><legend>1. Incident Information</legend><div class="card-body">
+        <div class="resource-form-grid">
+            <div class="form-group"><label class="form-label" for="resource-purok_id">Affected purok *</label><select class="form-control" id="resource-purok_id" name="purok_id" required><option value="">Select a recorded Hinaplanon purok</option><?php foreach ($puroks as $p): ?><option value="<?= (int)$p['purok_id'] ?>" <?= (string)$v('purok_id')===(string)$p['purok_id']?'selected':'' ?>><?= $e($p['purok_name']) ?> · <?= $e($p['risk_classification']) ?></option><?php endforeach; ?></select><small class="field-hint">Source-referenced Hinaplanon master list. Map risk is not a current impact assessment; pending risk verification remains labeled.</small></div>
+            <?php $field('disaster_date','Incident date','date',true); ?>
+            <div class="form-group"><label class="form-label" for="resource-disaster_type">Disaster type *</label><select class="form-control" id="resource-disaster_type" name="disaster_type" required><option value="">Select disaster type</option><?php foreach (Input::TYPES as $type): ?><option <?= $v('disaster_type')===$type?'selected':'' ?>><?= $e($type) ?></option><?php endforeach; ?></select></div>
+            <?php $field('weather_name','Recorded weather / conditions','text',true,'120'); ?>
+            <div class="form-group"><label class="form-label" for="resource-severity_level">Reported severity *</label><select class="form-control" id="resource-severity_level" name="severity_level" required><option value="">Select severity</option><?php foreach (Input::SEVERITIES as $severity): ?><option <?= $v('severity_level')===$severity?'selected':'' ?>><?= $e($severity) ?></option><?php endforeach; ?></select></div>
+            <div class="form-group"><label class="form-label" for="resource-is_urgent">Urgency *</label><select class="form-control" id="resource-is_urgent" name="is_urgent" required><option value="">Select urgency</option><option value="0" <?= $v('is_urgent')!=='' && (string)$v('is_urgent')==='0'?'selected':'' ?>>Normal</option><option value="1" <?= (string)$v('is_urgent')==='1'?'selected':'' ?>>Urgent — immediate attention requested</option></select></div>
         </div>
-    <?php endif; ?>
-</div>
-
-<div class="card" style="max-width: 780px; margin: 0 auto; border-top: 4px solid var(--primary-light);">
-    <div class="card-header" style="background: #f8fafc;">
-        <div class="card-title"><i class="fa fa-file-signature text-primary"></i> Incident Details & Resource Intake</div>
-        <span class="badge badge-primary"><i class="fa fa-bolt"></i> Real-time AI Classification</span>
-    </div>
-    <div class="card-body">
-        <form action="index.php?route=disaster-requests-create" method="POST">
-            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-                <div class="form-group">
-                    <label class="form-label">Affected Purok (Barangay Hinaplanon) *</label>
-                    <select name="purok_id" id="purok_id" class="form-control" required>
-                        <option value="">-- Select Affected Purok --</option>
-                        <?php foreach ($puroks as $p): ?>
-                            <option value="<?= $p['purok_id'] ?>">
-                                <?= htmlspecialchars($p['purok_name']) ?> (Risk: <?= htmlspecialchars($p['risk_classification']) ?> / <?= htmlspecialchars($p['risk_zone_color']) ?>)
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Incident / Request Date *</label>
-                    <input type="date" name="disaster_date" class="form-control" value="<?= date('Y-m-d') ?>" required>
-                </div>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-                <div class="form-group">
-                    <label class="form-label">Disaster Type *</label>
-                    <select name="disaster_type" class="form-control" required>
-                        <option value="Flood">Flood (Riverbank Overflow)</option>
-                        <option value="Flash Flood">Flash Flood</option>
-                        <option value="Typhoon">Typhoon / Strong Winds</option>
-                        <option value="Landslide">Landslide / Soil Erosion</option>
-                        <option value="Fire">Community Fire</option>
-                        <option value="Storm Surge">Storm Surge</option>
-                        <option value="Other">Other Emergency</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Weather Condition *</label>
-                    <input type="text" name="weather_name" class="form-control" placeholder="e.g. Heavy Continuous Rain / Shear Line" value="Heavy Rain" required>
-                </div>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-                <div class="form-group">
-                    <label class="form-label">Severity Level *</label>
-                    <select name="severity_level" class="form-control" required>
-                        <option value="Critical">Critical (Severe flooding / structural collapse)</option>
-                        <option value="High" selected>High (Significant inundation / water rising)</option>
-                        <option value="Medium">Medium (Moderate water / accessibility issues)</option>
-                        <option value="Low">Low (Precautionary monitoring)</option>
-                    </select>
-                </div>
-
-                <div class="form-group" style="display: flex; align-items: center; padding-top: 24px;">
-                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem;">
-                        <input type="checkbox" name="is_urgent" value="1" style="width: 18px; height: 18px;">
-                        <span style="color: var(--danger);"><i class="fa fa-bolt"></i> Mark as High Urgency (Immediate Rescue / Evacuation)</span>
-                    </label>
-                </div>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-                <div class="form-group">
-                    <label class="form-label">Affected Households (HH) *</label>
-                    <input type="number" id="affected_households" name="affected_households" class="form-control" min="1" value="25" required>
-                    <small style="color: var(--text-muted); font-size: 0.75rem;">Used for demand calculation (1 pack per household ratio).</small>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Affected Population (Est. Individuals) *</label>
-                    <input type="number" id="affected_population" name="affected_population" class="form-control" min="1" value="100" required>
-                    <small style="color: var(--text-muted); font-size: 0.75rem;">Auto-calculated as 4x households; editable.</small>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label class="form-label">Disaster Description & Field Observations *</label>
-                <textarea name="description" class="form-control" rows="3" placeholder="Describe the water level, river swelling, road conditions, trapped families, or urgent relief needs..." required></textarea>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
-                <div class="form-group">
-                    <label class="form-label">Latitude (Optional Geotag)</label>
-                    <input type="number" step="any" name="latitude" class="form-control" placeholder="e.g. 8.2412">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Longitude (Optional Geotag)</label>
-                    <input type="number" step="any" name="longitude" class="form-control" placeholder="e.g. 124.2543">
-                </div>
-            </div>
-
-            <div style="display: flex; gap: 10px; margin-top: 24px;">
-                <button type="submit" class="btn btn-primary" style="padding: 10px 18px;">
-                    <i class="fa fa-paper-plane"></i> Submit Disaster Request
-                </button>
-                <a href="index.php?route=disaster-requests" class="btn btn-outline">Cancel</a>
-            </div>
-        </form>
-    </div>
-</div>
+        <div class="form-group"><label class="form-label" for="resource-description">Incident description *</label><textarea class="form-control" id="resource-description" name="description" rows="4" maxlength="5000" required><?= $e($v('description')) ?></textarea><small class="field-hint">Record observations and sources. Avoid unnecessary personal identifiers.</small></div>
+        <details><summary>Optional recorded geotag</summary><div class="resource-form-grid"><?php foreach (['latitude'=>'Latitude (−90 to 90)','longitude'=>'Longitude (−180 to 180)'] as $key=>$label): ?><label for="resource-<?= $key ?>"><?= $e($label) ?><input class="form-control" id="resource-<?= $key ?>" type="number" step="any" name="<?= $key ?>" value="<?= $e($v($key)) ?>"></label><?php endforeach; ?></div></details>
+    </div></fieldset>
+    <fieldset class="card"><legend>2. Affected Population</legend><div class="card-body"><p class="field-hint">Enter recorded counts, not household-based estimates. Optional blanks mean Not recorded; enter 0 only when confirmed zero. Vulnerable groups may overlap.</p><div class="resource-form-grid">
+        <?php foreach (['affected_households'=>'Affected households','affected_population'=>'Affected individuals','children'=>'Children','seniors'=>'Senior citizens','pwds'=>'Persons with disabilities','pregnant_women'=>'Pregnant women'] as $key=>$label) $field($key,$label,'number',in_array($key,['affected_households','affected_population'],true)); ?>
+    </div></div></fieldset>
+    <fieldset class="card"><legend>3. Requested Resources</legend><div class="card-body"><p class="field-hint">Requested quantities are not approved quantities or stock reservations. Select units explicitly; jugs, cases and bottles are not automatically converted.</p><div class="resource-form-grid">
+        <?php foreach (Input::RESOURCES as $key=>$spec): ?><div class="resource-line"><?php $field($key,$spec['label']); ?><label class="form-label" for="resource-<?= $key ?>-unit">Requested unit<select class="form-control" id="resource-<?= $key ?>-unit" name="<?= $key ?>_unit"><option value="">Choose unit if requesting a quantity</option><?php foreach ($spec['units'] as $unit): ?><option <?= $v($key.'_unit')===$unit?'selected':'' ?>><?= $e($unit) ?></option><?php endforeach; ?></select></label></div><?php endforeach; ?>
+    </div><label class="form-label" for="resource-additional_needs">Additional needs / coordination notes</label><textarea class="form-control" id="resource-additional_needs" name="additional_needs" rows="3" maxlength="2000"><?= $e($v('additional_needs')) ?></textarea></div></fieldset>
+    <fieldset class="card"><legend>4. AI Priority Assessment</legend><div class="card-body"><div class="alert alert-info"><div>After submission, the existing Decision Tree artifact is assessed through the server-side ML API using disaster type, severity, urgency, recorded purok risk, affected households and affected individuals. Drafts are not assessed.</div></div><p><strong>Experimental and unvalidated for operational accuracy.</strong> The model classifies priority only; it does not determine relief quantities, approve a request or allocate stock. If the API is unavailable or invalid, the request is saved with no prediction.</p><p class="field-hint">ICDRRMO must review the request independently. Authorized officers can allocate recorded inventory only after approval.</p></div></fieldset>
+    <div class="resource-form-actions"><button class="btn btn-outline" type="submit" name="intent" value="draft" formnovalidate <?= !$storageReady?'disabled':'' ?>>Save Draft</button><button class="btn btn-primary" type="submit" name="intent" value="submit" <?= !$storageReady?'disabled':'' ?>>Submit Disaster Request</button><a class="btn btn-outline" href="index.php?route=disaster-requests">Cancel</a></div>
+</form>

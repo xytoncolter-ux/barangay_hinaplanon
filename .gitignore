@@ -1,1 +1,10 @@
-/database/sessions/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+backup_pre_*/
+database/sessions/
+database/*.sqlite
+.env
+.env.*
+!.env.example

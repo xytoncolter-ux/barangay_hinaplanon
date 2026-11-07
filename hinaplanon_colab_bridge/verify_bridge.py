@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import subprocess
 import tempfile
@@ -21,7 +22,7 @@ OPENER = build_opener(ProxyHandler({}))
 
 def request(path, payload=None):
     data = json.dumps(payload).encode() if payload is not None else None
-    req = Request('http://127.0.0.1:8765' + path, data=data, headers={'Content-Type': 'application/json'})
+    req = Request(os.environ.get('HINAPLANON_ML_API_BASE_URL', 'http://127.0.0.1:8001').rstrip('/') + path, data=data, headers={'Content-Type': 'application/json'})
     try:
         with OPENER.open(req, timeout=10) as response:
             return response.status, json.load(response)

@@ -9,29 +9,54 @@ use App\Core\View;
 use App\Models\PreparednessActivity;
 use App\Models\Purok;
 use App\Models\EventEvaluation;
+use App\Models\PreparednessOverview;
+use App\ML\PreparednessAnalysis;
+use App\ML\ColabModelClient;
+use App\ML\PreparednessQuantityPlan;
+use App\Support\ActivityCalendar;
 
 class PreparednessController {
     public function index(): void {
+        $this->management('events');
+    }
+
+    private function management(string $defaultTab = 'activities', ?array $preview = null, ?string $previewError = null): void {
         Auth::requireLogin();
+        if (!Auth::hasRole(['Resident','Responder','Barangay Head','ICDRRMO'])) return;
         $status = Request::get('status');
+        if (!is_string($status)) $status = null;
         $filters = [];
         if (!empty($status)) {
             $filters['status'] = $status;
         }
-        $activities = PreparednessActivity::all($filters);
-        $summary = PreparednessActivity::getSummary();
-        $upcoming = PreparednessActivity::getUpcoming();
-        $past = PreparednessActivity::getPast();
+        $inScope = static fn($a) => in_array(strtolower(trim($a['barangay_name'])), ['hinaplanon','barangay hinaplanon'], true);
+        // Calendar filters operate on the complete authorized archive, not an SQL status subset.
+        $isCalendar = Request::get('route') === 'preparedness-calendar' || Request::get('tab') === 'activities';
+        $activities = array_values(array_filter(PreparednessActivity::all($isCalendar ? [] : $filters), $inScope));
+        $activities = array_values(array_filter($activities, fn($a)=>ActivityCalendar::visibleToRole($a,(string)Auth::role())));
+        $upcoming = array_values(array_filter(PreparednessActivity::getUpcoming(), $inScope));
+        $past = array_values(array_filter(PreparednessActivity::getPast(), $inScope));
+        $summary = ['total'=>count(array_unique(array_column($activities,'preparedness_activities_id'))),
+            'upcoming'=>count($upcoming), 'completed'=>count(array_filter($activities,fn($a)=>$a['status']==='Completed')),
+            'total_turnout'=>array_sum(array_column($activities,'actual_turnout'))];
 
         $role = Auth::role();
-        $title = match ($role) {
-            'ICDRRMO' => 'Event Logs',
-            'Barangay Head' => 'Event Lists',
-            default => 'Event History'
-        };
+        $overview = PreparednessOverview::load((string)$role, (int)Auth::id());
+        $tab = Request::get('tab', $defaultTab);
+        if (!in_array($tab, ['events','analysis','allocations','relief','activities'], true)) $tab = $defaultTab;
+        $analysis = $role === 'Resident' ? [] : PreparednessAnalysis::analyze($overview['puroks'], $overview['trustedHistory'], $overview['events'], $activities);
+        $month = Request::get('month', date('Y-m'));
+        if (!is_string($month) || !preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month)) $month = date('Y-m');
 
-        View::render('preparedness.index', [
-            'title' => $title,
+        View::render('preparedness.management', [
+            'title' => match ($role) {
+                'ICDRRMO' => 'Event Logs',
+                'Barangay Head', 'Responder' => 'Event Lists',
+                default => 'Disaster Preparedness Management',
+            },
+            'overview' => $overview, 'analysis' => $analysis, 'activeTab' => $tab,
+            'preview' => $preview, 'previewError' => $previewError,
+            'selectedMonth' => $month,
             'activities' => $activities,
             'summary' => $summary,
             'upcoming' => $upcoming,
@@ -41,32 +66,46 @@ class PreparednessController {
     }
 
     public function calendar(): void {
-        Auth::requireLogin();
-        $selectedMonth = Request::get('month');
-        if (!$selectedMonth || !preg_match('/^\d{4}-\d{2}$/', (string)$selectedMonth)) {
-            $selectedMonth = date('Y-m');
+        $this->management();
+    }
+
+    public function predict(): void {
+        Auth::requireRole(['Barangay Head','ICDRRMO']);
+        if (!Auth::hasRole(['Barangay Head','ICDRRMO'])) return;
+        $csrf = Request::post('csrf_token');
+        if (!Request::isPost() || !is_string($csrf) || !Auth::validateCsrf($csrf)) {
+            http_response_code(403);
+            $this->management('analysis', null, 'Security verification failed. No prediction was requested.');
+            return;
         }
-
-        $activities = PreparednessActivity::all();
-        $upcoming = PreparednessActivity::getUpcoming();
-        $past = PreparednessActivity::getPast();
-        $summary = PreparednessActivity::getSummary();
-
-        $role = Auth::role();
-        $title = match ($role) {
-            'ICDRRMO' => 'Event Logs Calendar & Highlights',
-            'Barangay Head' => 'Event Lists Calendar & Highlights',
-            default => 'Event History Calendar & Highlights'
-        };
-
-        View::render('preparedness.calendar', [
-            'title' => $title,
-            'activities' => $activities,
-            'upcoming' => $upcoming,
-            'past' => $past,
-            'summary' => $summary,
-            'selectedMonth' => $selectedMonth
-        ]);
+        $id = filter_var(Request::post('disaster_request_id'), FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]);
+        $data = PreparednessOverview::load((string)Auth::role(), (int)Auth::id());
+        $matches = array_values(array_filter($data['events'], fn($r) => (int)$r['disaster_request_id'] === $id));
+        if (!$id || !$matches) {
+            http_response_code(422);
+            $this->management('analysis', null, 'Select an existing verified Hinaplanon incident.');
+            return;
+        }
+        $row = $matches[0];
+        $features = array_intersect_key($row, array_flip(['disaster_type','severity_level','affected_households','affected_population']));
+        $features['is_urgent'] = (int)$row['is_urgent'];
+        $features['purok_risk_level'] = $row['risk_classification'];
+        $prediction = ColabModelClient::predict($features);
+        $quantityPlan = null;
+        $supplyId = filter_var(Request::post('supply_id'), FILTER_VALIDATE_INT, ['options'=>['min_range'=>1]]);
+        $rate = filter_var(Request::post('units_per_household'), FILTER_VALIDATE_INT, ['options'=>['min_range'=>1,'max_range'=>100]]);
+        foreach ($data['inventory'] as $supply) {
+            if ($supplyId === (int)$supply['supply_id'] && $rate !== false && $row['affected_households'] !== null
+                && filter_var($row['affected_households'], FILTER_VALIDATE_INT) !== false
+                && $row['affected_households'] >= 0 && $row['affected_households'] <= 100000000
+                && filter_var($supply['supply_remaining'], FILTER_VALIDATE_INT) !== false && $supply['supply_remaining'] >= 0) {
+                $quantityPlan = PreparednessQuantityPlan::calculate((int)$row['affected_households'], $rate, (int)$supply['supply_remaining']);
+                $quantityPlan['supply_name'] = $supply['supply_name'];
+                $quantityPlan['unit'] = $supply['unit_of_measure'];
+            }
+        }
+        $this->management('analysis', ['result'=>$prediction,'features'=>$features,'request_id'=>$id,'quantity_plan'=>$quantityPlan],
+            $prediction ? null : 'Experimental service disabled, unavailable, or returned an invalid result. No allocations or inventory were changed.');
     }
 
     public function create(): void {

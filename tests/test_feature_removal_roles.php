@@ -161,8 +161,8 @@ assertCheck(strpos($responderDashboard, 'Disaster Preparedness Activities Schedu
     "Disaster Preparedness Activities Schedules is renamed to Event History for Responder");
 assertCheck(strpos($responderDashboard, 'Fill Up Disaster Request Form') === false, 
     "Fill Up Disaster Request Form is removed from Responder sidebar & dashboard");
-assertCheck(strpos($responderDashboard, 'Priority Allocations') !== false, 
-    "Preserved: Responder retains Priority Allocations in sidebar");
+assertCheck(strpos($responderDashboard, 'Event Lists') !== false,
+    "Responder retains integrated preparedness/allocation access");
 assertCheck(strpos($responderDashboard, 'Resource Management') !== false, 
     "Preserved: Responder retains Resource Management in sidebar");
 
@@ -225,8 +225,8 @@ assertCheck(strpos($adminDashboard, 'Decision Tree Allocation Recommendations') 
     "Preserved: Decision Tree Allocation Recommendations table on Barangay Head dashboard");
 assertCheck(strpos($adminDashboard, 'Residents Account Management') !== false, 
     "Preserved: Residents Account Management on Barangay Head dashboard & sidebar");
-assertCheck(strpos($adminDashboard, 'Disaster Preparedness Activities Schedules') !== false, 
-    "Preserved: Disaster Preparedness Activities Schedules in Barangay Head sidebar");
+assertCheck(strpos($adminDashboard, 'Event Lists') !== false,
+    "Barangay Head retains integrated preparedness navigation");
 assertCheck(strpos($adminDashboard, 'Event History') === false, 
     "Event History is NOT displayed for Barangay Head (only in Residents and Personnel)");
 assertCheck(strpos($adminDashboard, 'Resource Management') !== false, 
@@ -319,14 +319,14 @@ assertCheck(strpos($superDashboard, 'System User Accounts') !== false,
     "Preserved: System User Accounts in ICDRRMO sidebar");
 assertCheck(strpos($superDashboard, 'AI Priority Recommendations') !== false, 
     "Preserved: AI Priority Recommendations in ICDRRMO sidebar");
-assertCheck(strpos($superDashboard, 'Disaster Preparedness Activities Schedules') !== false, 
-    "Preserved: Disaster Preparedness Activities Schedules in ICDRRMO sidebar");
+assertCheck(strpos($superDashboard, 'Event Logs') !== false,
+    "ICDRRMO retains integrated preparedness navigation");
 assertCheck(strpos($superDashboard, 'Event History') === false, 
     "Event History is NOT displayed for ICDRRMO (only in Residents and Personnel)");
 assertCheck(strpos($superDashboard, 'Resource Management') !== false, 
     "Preserved: Resource Management in ICDRRMO sidebar");
-assertCheck(strpos($superDashboard, 'Fill Up Disaster Request Form') !== false, 
-    "Preserved: Fill Up Disaster Request Form in ICDRRMO sidebar & dashboard");
+assertCheck(strpos($superDashboard, 'Disaster Request Review') !== false && strpos($superDashboard, 'route=disaster-requests-create') === false,
+    "ICDRRMO reviews requests without Barangay Head submission controls");
 assertCheck(strpos($superDashboard, 'Submit Ground Field Report') === false && strpos($superDashboard, 'Submit Report') === false, 
     "Submit Status button is removed from ICDRRMO dashboard");
 assertCheck(strpos($superDashboard, 'Citywide Responder Ground Reports Monitoring') !== false, 

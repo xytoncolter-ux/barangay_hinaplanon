@@ -88,8 +88,8 @@
             <a href="index.php?route=hazard-map" class="btn btn-outline">
                 <i class="fa fa-map-location-dot"></i> Live Hazard Map
             </a>
-            <a href="index.php?route=disaster-requests-create" class="btn btn-primary">
-                <i class="fa fa-file-circle-plus"></i> Fill Up Disaster Request Form
+            <a href="index.php?route=disaster-requests" class="btn btn-primary">
+                <i class="fa fa-file-circle-check"></i> Disaster Request Review
             </a>
             <a href="index.php?route=recommendations" class="btn btn-outline">
                 <i class="fa fa-network-wired"></i> AI Priority Recommendations

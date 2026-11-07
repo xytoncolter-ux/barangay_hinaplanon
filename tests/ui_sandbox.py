@@ -10,7 +10,7 @@ from contextlib import closing
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = ['run_all_tests.php', 'test_feature_removal_roles.php', 'test_field_report_details.php',
+SUITES = ['test_disaster_resource_requests.php', 'test_activity_calendar.php', 'test_preparedness_management.php', 'run_all_tests.php', 'test_feature_removal_roles.php', 'test_field_report_details.php',
           'test_relief_hub.php', 'test_relief_claims_oversight.php', 'probe_routes.php']
 
 
@@ -34,6 +34,14 @@ def main():
     pristine = sandbox / 'database/pristine.sqlite'
     snapshot(pristine)
     db = sandbox / 'database/disaster_recommender.sqlite'
+    # Migration is executed from its copied path, never from the working application's directory.
+    migration = Path('database/migrations/20261106_disaster_resource_requests.php')
+    (sandbox / migration.parent).mkdir(parents=True)
+    shutil.copyfile(ROOT / migration, sandbox / migration)
+    shutil.copyfile(pristine, db)
+    subprocess.run(['php', str(migration)], cwd=sandbox,
+                   env={**os.environ, 'DB_DRIVER':'sqlite'}, check=True, capture_output=True)
+    shutil.copyfile(db, pristine)
     results = []
     for suite in SUITES:
         shutil.copyfile(pristine, db)

@@ -20,9 +20,9 @@ ACCOUNTS = {
 }
 NAV = {
     'Resident': {'dashboard', 'preparedness-calendar', 'notifications', 'profile'},
-    'Responder': {'dashboard', 'field-reports', 'preparedness-calendar', 'recommendations', 'reports', 'profile'},
-    'Barangay Head': {'dashboard', 'hazard-map', 'preparedness-calendar', 'disaster-requests-create', 'recommendations', 'reports', 'field-reports', 'pending-residents', 'profile'},
-    'ICDRRMO': {'dashboard', 'hazard-map', 'preparedness-calendar', 'disaster-requests-create', 'recommendations', 'reports', 'field-reports', 'users', 'pending-residents', 'relief-claims-oversight', 'profile'},
+    'Responder': {'dashboard', 'field-reports', 'preparedness-calendar', 'reports', 'profile'},
+    'Barangay Head': {'dashboard', 'hazard-map', 'preparedness-calendar', 'disaster-requests-create', 'reports', 'field-reports', 'pending-residents', 'profile'},
+    'ICDRRMO': {'dashboard', 'hazard-map', 'preparedness-calendar', 'disaster-requests', 'reports', 'field-reports', 'users', 'pending-residents', 'relief-claims-oversight', 'profile'},
 }
 
 
@@ -199,13 +199,47 @@ def main():
                 run(role + ' page ' + route, internal)
             def calendar():
                 goto('preparedness-calendar')
-                cell = page.locator('.cal-day-cell').first
+                cell = page.locator('.cal-date-button').first
                 cell.focus()
                 page.keyboard.press('Enter')
                 check(page.locator('.cal-modal-backdrop').evaluate("e => e.classList.contains('is-open')"), 'Calendar keyboard activation failed')
                 page.keyboard.press('Escape')
                 check(not page.locator('.cal-modal-backdrop').evaluate("e => e.classList.contains('is-open')"), 'Calendar Escape failed')
             run(role + ' calendar keyboard dialog', calendar)
+            def preparedness():
+                for tab in ['events','analysis','allocations','relief','activities']:
+                    goto('preparedness-calendar&tab=' + tab)
+                    check(page.locator('.preparedness-tabs a').count() == 5, 'Missing integrated sections')
+                    check(page.locator('.sidebar a[href="index.php?route=preparedness-calendar"]').count() == 1, 'Duplicate preparedness sidebar entry')
+                    check(page.locator('.sidebar a[href="index.php?route=recommendations"]').count() == 0, 'AI remains a standalone sidebar feature')
+                    if role == 'Resident':
+                        check(page.locator('#prediction-incident').count() == 0, 'Resident can access internal model inputs')
+                        check('Recorded inventory — not supplier receipts' not in page.locator('main').inner_text(), 'Resident stock leak')
+                    if role == 'Responder':
+                        check(page.locator('#prediction-incident').count() == 0, 'Responder can submit assessment')
+                    for width in [1440,390,320]:
+                        page.set_viewport_size({'width':width,'height':950})
+                        width_check()
+                    page.set_viewport_size({'width':1440,'height':1000})
+                if role in ['Barangay Head','ICDRRMO']:
+                    goto('preparedness-calendar&tab=analysis')
+                    token = page.locator('input[name="csrf_token"]').input_value()
+                    selected = page.locator('#prediction-incident option').nth(1).get_attribute('value')
+                    bad = page.request.post(args.url + '/index.php?route=preparedness-predict', form={'csrf_token':'invalid','disaster_request_id':selected})
+                    check(bad.status == 403, 'Missing backend CSRF denial')
+                    invalid = page.request.post(args.url + '/index.php?route=preparedness-predict', form={'csrf_token':token,'disaster_request_id':'-1'})
+                    check(invalid.status == 422, 'Invalid event ID accepted')
+                    page.locator('#prediction-incident').select_option(selected)
+                    page.locator('#planning-resource').select_option(index=1)
+                    page.get_by_role('button',name='Preview classification for human review').click()
+                    page.wait_for_load_state('networkidle')
+                    text=page.locator('main').inner_text()
+                    check('Separate transparent quantity-policy preview' in text, 'Quantity policy preview missing')
+                    check('model-reported confidence' in text or 'service disabled, unavailable' in text, 'Neither prediction nor graceful failure shown')
+                else:
+                    denied = page.request.post(args.url + '/index.php?route=preparedness-predict', form={'csrf_token':'invalid','disaster_request_id':'1'})
+                    check('route=dashboard' in denied.url, 'Unauthorized role could invoke model preview')
+            run(role + ' five preparedness tabs, privacy, responsive layouts and prediction guards', preparedness)
             def removed_routes():
                 for route in ['emergency-sos', 'shelters', 'ml-model', 'historical-records', 'evaluation-results', 'audit-logs']:
                     goto(route)

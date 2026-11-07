@@ -41,12 +41,14 @@ class DisasterRequestController {
         }
 
         $requests = DisasterRequest::all($filters);
+        $intakes = in_array($role,['Barangay Head','ICDRRMO'],true) ? \App\Models\DisasterResourceIntake::listing((int)$userId) : [];
         $counts = DisasterRequest::getCounts();
         $puroks = Purok::all();
 
         View::render('disaster_requests.index', [
             'title' => 'Disaster Incident & Assistance Requests',
             'requests' => $requests,
+            'intakes' => $intakes,
             'counts' => $counts,
             'puroks' => $puroks,
             'statusFilter' => $statusFilter,
@@ -55,70 +57,16 @@ class DisasterRequestController {
     }
 
     public function create(): void {
-        Auth::requireLogin();
-        if (!Auth::hasRole(['Barangay Head', 'ICDRRMO'])) {
-            Auth::denyAccess('Fill Up Disaster Request Form is restricted to Barangay Head and ICDRRMO.');
-            return;
-        }
-        $puroks = Purok::all();
-        $barangays = Barangay::all();
-
-        if (Request::isPost()) {
-            if (!Auth::validateCsrf(Request::post('csrf_token'))) {
-                Auth::setFlash('danger', 'Security validation failed.');
-                header("Location: index.php?route=disaster-requests-create");
-                exit;
-            }
-
-            $purokId = (int)Request::post('purok_id');
-            $disasterType = Request::post('disaster_type', 'Flood');
-            $weather = trim(Request::post('weather_name', 'Heavy Rain'));
-            $desc = trim(Request::post('description', ''));
-            $severity = Request::post('severity_level', 'High');
-            $isUrgent = !empty(Request::post('is_urgent')) ? 1 : 0;
-            $households = max(1, (int)Request::post('affected_households', 1));
-            $population = max(1, (int)Request::post('affected_population', $households * 4));
-            $date = Request::post('disaster_date', date('Y-m-d'));
-            $lat = Request::post('latitude') ? (float)Request::post('latitude') : null;
-            $lng = Request::post('longitude') ? (float)Request::post('longitude') : null;
-
-            if (empty($desc) || $purokId <= 0) {
-                Auth::setFlash('warning', 'Please provide a description and select the affected Purok.');
-                header("Location: index.php?route=disaster-requests-create");
-                exit;
-            }
-
-            $reqId = DisasterRequest::create([
-                'user_id' => (int)Auth::id(),
-                'barangay_id' => 1,
-                'purok_id' => $purokId,
-                'disaster_type' => $disasterType,
-                'weather_name' => $weather,
-                'description' => $desc,
-                'severity_level' => $severity,
-                'is_urgent' => $isUrgent,
-                'affected_households' => $households,
-                'affected_population' => $population,
-                'disaster_date' => $date,
-                'latitude' => $lat,
-                'longitude' => $lng
-            ]);
-
-            Auth::setFlash('success', "Disaster incident logged successfully (ID: #{$reqId}). Initial status: Pending Verification.");
-            header("Location: index.php?route=disaster-requests-show&id={$reqId}");
-            exit;
-        }
-
-        View::render('disaster_requests.create', [
-            'title' => 'Fill Up Disaster Request Form',
-            'puroks' => $puroks,
-            'barangays' => $barangays
-        ]);
+        (new DisasterResourceController())->form();
     }
 
     public function show(): void {
         Auth::requireLogin();
+        if (!Auth::hasRole(['Barangay Head','ICDRRMO','Responder'])) { Auth::denyAccess(); return; }
         $id = (int)Request::get('id');
+        if ($intake=\App\Models\DisasterResourceIntake::linkedToIncident($id)) {
+            Auth::redirect('index.php?route=disaster-requests-resource-show&id='.$intake); return;
+        }
         $request = DisasterRequest::findById($id);
 
         if (!$request) {
@@ -126,6 +74,7 @@ class DisasterRequestController {
             header("Location: index.php?route=disaster-requests");
             exit;
         }
+        if (Auth::role()==='Responder' && (int)($request['assigned_to_user_id']??0)!==(int)Auth::id()) { Auth::denyAccess(); return; }
 
         $recommendation = Recommendation::findByDisasterRequestId($id);
         $supplies = Supply::all();
@@ -144,6 +93,7 @@ class DisasterRequestController {
 
     public function verify(): void {
         Auth::requireRole(['Barangay Head', 'ICDRRMO']);
+        if (!Auth::hasRole(['Barangay Head','ICDRRMO']) || !$this->legacyOnly()) return;
         if (!Auth::validateCsrf(Request::post('csrf_token'))) {
             Auth::setFlash('danger', 'Security validation failed.');
             header("Location: index.php?route=disaster-requests");
@@ -163,6 +113,7 @@ class DisasterRequestController {
 
     public function assign(): void {
         Auth::requireRole(['ICDRRMO', 'Barangay Head']);
+        if (!Auth::hasRole(['Barangay Head','ICDRRMO']) || !$this->legacyOnly()) return;
         if (!Auth::validateCsrf(Request::post('csrf_token'))) {
             Auth::setFlash('danger', 'Security validation failed.');
             header("Location: index.php?route=disaster-requests");
@@ -189,6 +140,7 @@ class DisasterRequestController {
 
     public function updateStatus(): void {
         Auth::requireRole(['Responder', 'ICDRRMO', 'Barangay Head']);
+        if (!Auth::hasRole(['Responder','Barangay Head','ICDRRMO']) || !$this->legacyOnly()) return;
         if (!Auth::validateCsrf(Request::post('csrf_token'))) {
             Auth::setFlash('danger', 'Security validation failed.');
             header("Location: index.php?route=disaster-requests");
@@ -209,6 +161,7 @@ class DisasterRequestController {
 
     public function generateRecommendation(): void {
         Auth::requireRole(['ICDRRMO', 'Barangay Head']);
+        if (!Auth::hasRole(['Barangay Head','ICDRRMO']) || !$this->legacyOnly()) return;
         if (!Auth::validateCsrf(Request::post('csrf_token'))) {
             Auth::setFlash('danger', 'Security validation failed.');
             header("Location: index.php?route=disaster-requests");
@@ -228,5 +181,13 @@ class DisasterRequestController {
             header("Location: index.php?route=disaster-requests-show&id={$id}");
             exit;
         }
+    }
+    private function legacyOnly(): bool {
+        $id=filter_var(Request::post('disaster_request_id'),FILTER_VALIDATE_INT);
+        if ($id && \App\Models\DisasterResourceIntake::linkedToIncident($id)) {
+            Auth::denyAccess('Use the resource-request review and allocation workflow. Legacy incident actions cannot approve or modify this request.');
+            return false;
+        }
+        return true;
     }
 }
